@@ -19,8 +19,17 @@ export class GameEngine {
   
   private clock: THREE.Clock;
   private mouse = new THREE.Vector2();
+  private touchStartPoint = new THREE.Vector2();
+  private initialTargetAtStart = new THREE.Vector2();
+  private isTouching = false;
+  private isMouseActive = false;
+  
   private targetX = 0;
   private targetY = 0;
+  
+  private readonly LIMIT_X = 27;
+  private readonly LIMIT_Y = 18;
+  private readonly SENSITIVITY = 1.5;
   
   private state: GameState;
   private onStateUpdate: (state: GameState) => void;
@@ -63,8 +72,13 @@ export class GameEngine {
     
     window.addEventListener('resize', this.onResize.bind(this));
     window.addEventListener('mousemove', this.onMouseMove.bind(this));
-    window.addEventListener('touchstart', this.onTouchMove.bind(this));
-    window.addEventListener('touchmove', this.onTouchMove.bind(this));
+    window.addEventListener('mousedown', () => this.isMouseActive = true);
+    window.addEventListener('mouseup', () => this.isMouseActive = false);
+    
+    window.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
+    window.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
+    window.addEventListener('touchend', this.onTouchEnd.bind(this));
+    window.addEventListener('touchcancel', this.onTouchEnd.bind(this));
     
     this.animate();
   }
@@ -227,20 +241,41 @@ export class GameEngine {
   }
 
   private onMouseMove(e: MouseEvent) {
+    this.isMouseActive = true;
     this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     this.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    this.targetX = this.mouse.x * 25;
-    this.targetY = this.mouse.y * 15;
+    this.targetX = this.mouse.x * this.LIMIT_X;
+    this.targetY = this.mouse.y * this.LIMIT_Y;
+  }
+
+  private onTouchStart(e: TouchEvent) {
+    if (e.touches.length > 0) {
+      e.preventDefault();
+      this.isTouching = true;
+      const touch = e.touches[0];
+      this.touchStartPoint.set(touch.clientX, touch.clientY);
+      this.initialTargetAtStart.set(this.targetX, this.targetY);
+    }
   }
 
   private onTouchMove(e: TouchEvent) {
-    if (e.touches.length > 0) {
+    if (e.touches.length > 0 && this.isTouching) {
+      e.preventDefault();
       const touch = e.touches[0];
-      this.mouse.x = (touch.clientX / window.innerWidth) * 2 - 1;
-      this.mouse.y = -(touch.clientY / window.innerHeight) * 2 + 1;
-      this.targetX = this.mouse.x * 25;
-      this.targetY = this.mouse.y * 15;
+      
+      const deltaX = touch.clientX - this.touchStartPoint.x;
+      const deltaY = touch.clientY - this.touchStartPoint.y;
+      
+      const moveX = (deltaX / window.innerWidth) * 60 * this.SENSITIVITY;
+      const moveY = -(deltaY / window.innerHeight) * 40 * this.SENSITIVITY;
+      
+      this.targetX = THREE.MathUtils.clamp(this.initialTargetAtStart.x + moveX, -this.LIMIT_X, this.LIMIT_X);
+      this.targetY = THREE.MathUtils.clamp(this.initialTargetAtStart.y + moveY, -this.LIMIT_Y, this.LIMIT_Y);
     }
+  }
+
+  private onTouchEnd() {
+    this.isTouching = false;
   }
 
   private onResize() {
@@ -378,6 +413,12 @@ export class GameEngine {
 
     if (this.gameActive) {
       this.updateLogic(delta);
+
+      // Return to center if no active input
+      if (!this.isTouching && !this.isMouseActive) {
+        this.targetX *= 0.95;
+        this.targetY *= 0.95;
+      }
 
       // Plane Movement Lerp
       this.plane.position.x += (this.targetX - this.plane.position.x) * 0.1;
