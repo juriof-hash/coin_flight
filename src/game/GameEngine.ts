@@ -60,6 +60,7 @@ export class GameEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     container.appendChild(this.renderer.domElement);
+    const canvas = this.renderer.domElement;
 
     this.clock = new THREE.Clock();
 
@@ -71,14 +72,17 @@ export class GameEngine {
     this.initWorld();
     
     window.addEventListener('resize', this.onResize.bind(this));
-    window.addEventListener('mousemove', this.onMouseMove.bind(this));
-    window.addEventListener('mousedown', () => this.isMouseActive = true);
+    
+    // Attach input listeners to the canvas element to avoid blocking UI interactions
+    canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
+    canvas.addEventListener('mousedown', () => this.isMouseActive = true);
+    
     window.addEventListener('mouseup', () => this.isMouseActive = false);
     
-    window.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
-    window.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
-    window.addEventListener('touchend', this.onTouchEnd.bind(this));
-    window.addEventListener('touchcancel', this.onTouchEnd.bind(this));
+    canvas.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
+    canvas.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
+    canvas.addEventListener('touchend', this.onTouchEnd.bind(this));
+    canvas.addEventListener('touchcancel', this.onTouchEnd.bind(this));
     
     this.animate();
   }
