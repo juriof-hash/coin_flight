@@ -31,6 +31,7 @@ export class GameEngine {
   private coins: THREE.Object3D[] = [];
   
   private lastDifficultyIncrease = 0;
+  private lastStateUpdateTime = 0;
   private gameActive = false;
 
   constructor(container: HTMLElement, onStateUpdate: (state: GameState) => void) {
@@ -51,8 +52,7 @@ export class GameEngine {
     this.renderer.shadowMap.enabled = true;
     container.appendChild(this.renderer.domElement);
 
-    this.clock = THREE.Clock ? new THREE.Clock() : { getDelta: () => 0, getElapsedTime: () => 0 } as any; // Fallback for TS if needed
-    if (!(this.clock instanceof THREE.Clock)) this.clock = new THREE.Clock();
+    this.clock = new THREE.Clock();
 
     this.worldObjects = new THREE.Group();
     this.scene.add(this.worldObjects);
@@ -325,7 +325,15 @@ export class GameEngine {
       }
     });
 
-    this.onStateUpdate({ ...this.state });
+    this.triggerStateUpdate();
+  }
+
+  private triggerStateUpdate() {
+    const now = performance.now();
+    if (now - this.lastStateUpdateTime > 100 || this.state.isGameOver) { 
+      this.onStateUpdate({ ...this.state });
+      this.lastStateUpdateTime = now;
+    }
   }
 
   private collectCoin(type: string) {
