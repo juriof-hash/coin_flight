@@ -1,9 +1,9 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;900&family=JetBrains+Mono:wght@500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
 
 @theme {
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "VT323", "Courier New", Courier, monospace;
+  --font-mono: "VT323", "Courier New", Courier, monospace;
 }
 
 body {
@@ -12,7 +12,10 @@ body {
   overflow: hidden;
   background-color: #000;
   user-select: none;
-  touch-action: none;
+  /* Allow default touch actions globally to prevent UI unresponsiveness,
+     we handle preventDefault in GameEngine where needed */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
 }
 
 canvas {

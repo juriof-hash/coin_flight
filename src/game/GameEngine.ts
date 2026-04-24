@@ -27,9 +27,9 @@ export class GameEngine {
   private targetX = 0;
   private targetY = 0;
   
-  private readonly LIMIT_X = 27;
-  private readonly LIMIT_Y = 18;
-  private readonly SENSITIVITY = 1.5;
+  private readonly LIMIT_X = 18;
+  private readonly LIMIT_Y = 10;
+  private readonly SENSITIVITY = 0.9;
   
   private state: GameState;
   private onStateUpdate: (state: GameState) => void;
@@ -38,6 +38,17 @@ export class GameEngine {
   private worldObjects: THREE.Group;
   private obstacles: THREE.Object3D[] = [];
   private coins: THREE.Object3D[] = [];
+  
+  // Instanced Meshes for Environment
+  private treeTrunks?: THREE.InstancedMesh;
+  private treeLeaves?: THREE.InstancedMesh;
+  private treeData: {x:number, y:number, z:number, scale:number}[] = [];
+  
+  // Speed Trails
+  private speedLines?: THREE.InstancedMesh;
+  private speedLineData: {x:number, y:number, z:number, speed:number}[] = [];
+  
+  private propeller?: THREE.Mesh;
   
   private lastDifficultyIncrease = 0;
   private lastStateUpdateTime = 0;
@@ -48,12 +59,13 @@ export class GameEngine {
     this.state = this.getInitialState();
     
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x020617);
-    this.scene.fog = new THREE.Fog(0x020617, 100, 400);
+    this.scene.background = new THREE.Color(0x87ceeb);
+    this.scene.fog = new THREE.Fog(0x87ceeb, 20, 150);
 
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    this.camera.position.set(0, 5, 20);
-    this.camera.lookAt(0, 0, 0);
+    // Chase Cam Setup
+    this.camera = new THREE.PerspectiveCamera(85, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.camera.position.set(0, 6, 12);
+    this.camera.lookAt(0, -2, -20);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -101,61 +113,125 @@ export class GameEngine {
   }
 
   private initLights() {
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xfff0dd, 0.6);
     this.scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(50, 100, 50);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(20, 50, 20);
     dirLight.castShadow = true;
+    dirLight.shadow.camera.left = -30;
+    dirLight.shadow.camera.right = 30;
+    dirLight.shadow.camera.top = 30;
+    dirLight.shadow.camera.bottom = -30;
     this.scene.add(dirLight);
   }
 
   private initPlayer() {
     this.plane = new THREE.Group();
     
-    // Body (Main fuselage)
-    const bodyGeom = new THREE.BoxGeometry(1, 0.6, 2);
-    const bodyMat = new THREE.MeshPhongMaterial({ color: 0xef4444 });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.castShadow = true;
-    this.plane.add(body);
-
+    // Fuselage
+    const fuselageGeom = new THREE.BoxGeometry(1.5, 1.5, 4);
+    const fuselageMat = new THREE.MeshPhongMaterial({ color: 0xcc2222, flatShading: true });
+    const fuselage = new THREE.Mesh(fuselageGeom, fuselageMat);
+    fuselage.castShadow = true;
+    this.plane.add(fuselage);
+    
     // Wings
-    const wingGeom = new THREE.BoxGeometry(4, 0.1, 0.8);
-    const wingMat = new THREE.MeshPhongMaterial({ color: 0xef4444 });
-    const wings = new THREE.Mesh(wingGeom, wingMat);
-    wings.position.y = 0.1;
-    wings.castShadow = true;
-    this.plane.add(wings);
-
+    const wingGeom = new THREE.BoxGeometry(7, 0.2, 1.5);
+    const wingMat = new THREE.MeshPhongMaterial({ color: 0xeeeeee, flatShading: true });
+    const topWing = new THREE.Mesh(wingGeom, wingMat);
+    topWing.position.set(0, 0.8, 0.5);
+    topWing.castShadow = true;
+    const bottomWing = new THREE.Mesh(wingGeom, wingMat);
+    bottomWing.position.set(0, -0.6, 0.5);
+    bottomWing.castShadow = true;
+    this.plane.add(topWing, bottomWing);
+    
+    // Wing struts
+    const strutGeom = new THREE.BoxGeometry(0.1, 1.4, 0.1);
+    const strutMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    const strut1 = new THREE.Mesh(strutGeom, strutMat);
+    strut1.position.set(3, 0.1, 0.5);
+    const strut2 = new THREE.Mesh(strutGeom, strutMat);
+    strut2.position.set(-3, 0.1, 0.5);
+    this.plane.add(strut1, strut2);
+    
     // Tail
-    const tailGeom = new THREE.BoxGeometry(0.1, 0.8, 0.6);
-    const tailMat = new THREE.MeshPhongMaterial({ color: 0xdc2626 });
-    const tail = new THREE.Mesh(tailGeom, tailMat);
-    tail.position.set(0, 0.5, 0.8);
-    tail.castShadow = true;
-    this.plane.add(tail);
-
+    const tailWingGeom = new THREE.BoxGeometry(2.5, 0.2, 1);
+    const tailWing = new THREE.Mesh(tailWingGeom, wingMat);
+    tailWing.position.set(0, 0.2, 1.8);
+    const rudderGeom = new THREE.BoxGeometry(0.2, 1.2, 1);
+    const rudder = new THREE.Mesh(rudderGeom, fuselageMat);
+    rudder.position.set(0, 0.8, 1.8);
+    this.plane.add(tailWing, rudder);
+    
     // Propeller
-    const propGeom = new THREE.BoxGeometry(1.2, 0.1, 0.05);
-    const propMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-    const prop = new THREE.Mesh(propGeom, propMat);
-    prop.position.z = -1.05;
-    prop.name = 'propeller';
-    this.plane.add(prop);
-
+    this.propeller = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.3, 0.1), new THREE.MeshPhongMaterial({ color: 0x111111 }));
+    this.propeller.position.set(0, 0, -2.1);
+    this.propeller.name = 'propeller';
+    this.plane.add(this.propeller);
+    
     this.scene.add(this.plane);
   }
 
   private initWorld() {
     // Basic floor for Meadow
     const floorGeom = new THREE.PlaneGeometry(1000, 1000);
-    const floorMat = new THREE.MeshPhongMaterial({ color: 0x4ade80 });
+    const floorMat = new THREE.MeshPhongMaterial({ color: 0x2d8a4e, flatShading: true });
     const floor = new THREE.Mesh(floorGeom, floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -10;
     floor.receiveShadow = true;
     this.scene.add(floor);
+    
+    // Instanced Trees
+    const treeCount = 150;
+    const trunkGeom = new THREE.CylinderGeometry(0.3, 0.5, 1.5, 5);
+    const leavesGeom = new THREE.DodecahedronGeometry(2, 0);
+    const trunkMat = new THREE.MeshPhongMaterial({ color: 0x5a4325, flatShading: true });
+    const leavesMat = new THREE.MeshPhongMaterial({ color: 0x3a9e5b, flatShading: true });
+    
+    this.treeTrunks = new THREE.InstancedMesh(trunkGeom, trunkMat, treeCount);
+    this.treeLeaves = new THREE.InstancedMesh(leavesGeom, leavesMat, treeCount);
+    this.treeTrunks.castShadow = true;
+    this.treeLeaves.castShadow = true;
+    
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < treeCount; i++) {
+      const x = (Math.random() - 0.5) * 150;
+      const z = -Math.random() * 300;
+      const scale = 0.6 + Math.random() * 0.8;
+      this.treeData.push({ x, y: -10, z, scale });
+      
+      dummy.position.set(x, -10 + 0.75 * scale, z);
+      dummy.scale.set(scale, scale, scale);
+      dummy.updateMatrix();
+      this.treeTrunks.setMatrixAt(i, dummy.matrix);
+      
+      dummy.position.set(x, -10 + 2.5 * scale, z);
+      dummy.updateMatrix();
+      this.treeLeaves.setMatrixAt(i, dummy.matrix);
+    }
+    this.scene.add(this.treeTrunks);
+    this.scene.add(this.treeLeaves);
+
+    // Speed lines (InstancedMesh)
+    const lineCount = 100;
+    const lineGeom = new THREE.BoxGeometry(0.1, 0.1, 4);
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2 });
+    this.speedLines = new THREE.InstancedMesh(lineGeom, lineMat, lineCount);
+    for(let i=0; i<lineCount; i++) {
+      const x = (Math.random() - 0.5) * 60;
+      const y = (Math.random() - 0.5) * 40;
+      const z = -Math.random() * 200;
+      const speed = 100 + Math.random() * 100;
+      this.speedLineData.push({x, y, z, speed});
+      dummy.position.set(x, y, z);
+      dummy.scale.set(1,1,1);
+      dummy.updateMatrix();
+      this.speedLines.setMatrixAt(i, dummy.matrix);
+    }
+    this.scene.add(this.speedLines);
   }
 
   private spawnObject() {
@@ -191,56 +267,65 @@ export class GameEngine {
 
   private createCoin(color: number, type: string) {
     const group = new THREE.Group();
-    const geom = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 8);
+    const geom = new THREE.CylinderGeometry(1.2, 1.2, 0.4, 8); // Low-poly thick coin
     const mat = new THREE.MeshPhongMaterial({ 
       color, 
       emissive: color, 
-      emissiveIntensity: 0.5,
-      shininess: 100
+      emissiveIntensity: 0.2,
+      shininess: 100,
+      flatShading: true
     });
     const coin = new THREE.Mesh(geom, mat);
     coin.rotation.x = Math.PI / 2;
     group.add(coin);
 
-    // Inner detail
-    const innerGeom = new THREE.TorusGeometry(0.5, 0.05, 8, 16);
-    const innerMat = new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0xffffff });
-    const inner = new THREE.Mesh(innerGeom, innerMat);
-    group.add(inner);
-
-    group.userData = { isCoin: true, type, radius: 2 }; // Generous hitbox
+    group.userData = { isCoin: true, type, radius: 2, mesh: coin }; // Generous hitbox
     return group;
   }
 
   private createObstacle() {
     const group = new THREE.Group();
-    let geom: THREE.BufferGeometry;
-    let color: number;
-
+    
     if (this.state.stage === 'Meadow') {
-      // Bird-like simple mesh
-      geom = new THREE.ConeGeometry(1, 2, 4);
-      color = 0x78350f;
+      // Low-poly Eagle/Bird
+      const bodyGeom = new THREE.ConeGeometry(0.8, 3, 4);
+      const bodyMat = new THREE.MeshPhongMaterial({ color: 0x333333, flatShading: true });
+      const body = new THREE.Mesh(bodyGeom, bodyMat);
+      body.rotation.x = -Math.PI / 2;
+      group.add(body);
+      
+      const wingGeom = new THREE.BoxGeometry(3, 0.2, 1);
+      const wingMat = new THREE.MeshPhongMaterial({ color: 0x444444, flatShading: true });
+      
+      const leftWing = new THREE.Mesh(wingGeom, wingMat);
+      leftWing.position.set(1.5, 0, 0);
+      const rightWing = new THREE.Mesh(wingGeom, wingMat);
+      rightWing.position.set(-1.5, 0, 0);
+      
+      const leftPivot = new THREE.Group();
+      leftPivot.position.set(0.4, 0, 0.2);
+      leftPivot.add(leftWing);
+      
+      const rightPivot = new THREE.Group();
+      rightPivot.position.set(-0.4, 0, 0.2);
+      rightPivot.add(rightWing);
+      
+      group.add(leftPivot, rightPivot);
+      group.userData = { isObstacle: true, radius: 2.0, leftWing: leftPivot, rightWing: rightPivot, randomOffset: Math.random() * Math.PI * 2 };
     } else if (this.state.stage === 'Ocean') {
-      // Buoy or simple drone
-      geom = new THREE.SphereGeometry(1.2, 5, 5);
-      color = 0xef4444;
-    } else if (this.state.stage === 'City') {
-      // Drone/Tech 
-      geom = new THREE.BoxGeometry(2, 0.5, 2);
-      color = 0x334155;
+      const geom = new THREE.DodecahedronGeometry(1.5, 0);
+      const color = 0xef4444;
+      const mat = new THREE.MeshPhongMaterial({ color, flatShading: true });
+      group.add(new THREE.Mesh(geom, mat));
+      group.userData = { isObstacle: true, radius: 1.5 };
     } else {
-      // Meteorite (Space)
-      geom = new THREE.IcosahedronGeometry(1.8, 0);
-      color = 0x4b5563;
+      const geom = new THREE.IcosahedronGeometry(1.8, 0);
+      const color = 0x4b5563;
+      const mat = new THREE.MeshPhongMaterial({ color, flatShading: true });
+      group.add(new THREE.Mesh(geom, mat));
+      group.userData = { isObstacle: true, radius: 1.8 };
     }
 
-    const mat = new THREE.MeshPhongMaterial({ color, flatShading: true });
-    const mesh = new THREE.Mesh(geom, mat);
-    if (this.state.stage === 'Meadow') mesh.rotation.x = Math.PI / 2;
-    group.add(mesh);
-
-    group.userData = { isObstacle: true, radius: 1.0 }; // Strict hitbox
     return group;
   }
 
@@ -347,9 +432,12 @@ export class GameEngine {
       // Collision detection
       const planePos = this.plane.position;
       const objPos = obj.position;
-      const dist = planePos.distanceTo(objPos);
+      // Convert to XY dist for chase-cam depth (objects zip past z)
+      const distXY = Math.sqrt(Math.pow(planePos.x - objPos.x, 2) + Math.pow(planePos.y - objPos.y, 2));
+      const distZ = Math.abs(planePos.z - objPos.z);
       
-      if (dist < (obj.userData.radius + 1)) {
+      // Hitbox is slightly elongated on Z
+      if (distXY < (obj.userData.radius + 1.5) && distZ < 2) {
         if (obj.userData.isCoin) {
           this.collectCoin(obj.userData.type);
           this.removeObject(obj);
@@ -358,11 +446,61 @@ export class GameEngine {
         }
       }
 
+      // Coin Rotation & Bird Flapping
+      if (obj.userData.isCoin) {
+        obj.userData.mesh.rotation.y += delta * 3;
+      }
+      if (obj.userData.isObstacle && obj.userData.leftWing) {
+        const flap = Math.sin(performance.now() * 0.01 + obj.userData.randomOffset) * 0.6;
+        obj.userData.leftWing.rotation.z = flap;
+        obj.userData.rightWing.rotation.z = -flap;
+      }
+
       // Cleanup
       if (obj.position.z > 30) {
         this.removeObject(obj);
       }
     });
+
+    // Update Environment Instanced Meshes
+    const dummy = new THREE.Object3D();
+    if (this.treeTrunks && this.treeLeaves) {
+      for (let i = 0; i < this.treeData.length; i++) {
+        const t = this.treeData[i];
+        t.z += moveSpeed;
+        if (t.z > 20) {
+          t.z = -300;
+          t.x = (Math.random() - 0.5) * 150;
+        }
+        
+        dummy.position.set(t.x, t.y + 0.75 * t.scale, t.z);
+        dummy.scale.set(t.scale, t.scale, t.scale);
+        dummy.updateMatrix();
+        this.treeTrunks.setMatrixAt(i, dummy.matrix);
+        
+        dummy.position.set(t.x, t.y + 2.5 * t.scale, t.z);
+        dummy.updateMatrix();
+        this.treeLeaves.setMatrixAt(i, dummy.matrix);
+      }
+      this.treeTrunks.instanceMatrix.needsUpdate = true;
+      this.treeLeaves.instanceMatrix.needsUpdate = true;
+    }
+    
+    // Update Speed Trails
+    if (this.speedLines) {
+      for(let i=0; i<this.speedLineData.length; i++) {
+        const s = this.speedLineData[i];
+        s.z += s.speed * delta * this.state.gameSpeed;
+        if(s.z > 20) {
+          s.z = -200;
+        }
+        dummy.position.set(s.x, s.y, s.z);
+        dummy.scale.set(1,1,1);
+        dummy.updateMatrix();
+        this.speedLines.setMatrixAt(i, dummy.matrix);
+      }
+      this.speedLines.instanceMatrix.needsUpdate = true;
+    }
 
     this.triggerStateUpdate();
   }
@@ -397,14 +535,14 @@ export class GameEngine {
   private updateBackground() {
     let color: number;
     switch(this.state.stage) {
-      case 'Ocean': color = 0x082f49; break; // Dark Blue
+      case 'Ocean': color = 0x0ea5e9; break; // Sky blue 500
       case 'City': color = 0x1e293b; break; // Slate
       case 'Space': color = 0x020617; break; // Deep Space
-      default: color = 0x064e3b; // Deep Forest (Meadow Hills Dark)
+      default: color = 0x87ceeb; // Light Sky Blue
     }
     
     const currentColor = new THREE.Color(this.scene.background as THREE.Color);
-    currentColor.lerp(new THREE.Color(color), 0.01);
+    currentColor.lerp(new THREE.Color(color), 0.005);
     this.scene.background = currentColor;
     if (this.scene.fog) {
       (this.scene.fog as THREE.Fog).color = currentColor;
@@ -428,17 +566,18 @@ export class GameEngine {
       this.plane.position.x += (this.targetX - this.plane.position.x) * 0.1;
       this.plane.position.y += (this.targetY - this.plane.position.y) * 0.1;
 
-      // Plane Tilting
+      // Plane Tilting (Banking and Pitching)
       this.plane.rotation.z = -(this.targetX - this.plane.position.x) * 0.1;
-      this.plane.rotation.x = (this.targetY - this.plane.position.y) * 0.1;
+      this.plane.rotation.x = -(this.targetY - this.plane.position.y) * 0.1;
 
       // Propeller rotation
       const prop = this.plane.getObjectByName('propeller');
-      if (prop) prop.rotation.z += 0.5;
+      if (prop) prop.rotation.z += 20 * delta;
 
-      // Camera Chase
-      this.camera.position.x += (this.plane.position.x - this.camera.position.x) * 0.05;
-      this.camera.lookAt(this.plane.position.x * 0.5, this.plane.position.y * 0.5, 0);
+      // Camera Chase Tracking
+      this.camera.position.x += (this.plane.position.x * 0.5 - this.camera.position.x) * 0.1;
+      this.camera.position.y += ((this.plane.position.y * 0.3 + 6) - this.camera.position.y) * 0.1;
+      this.camera.lookAt(this.plane.position.x * 0.3, this.plane.position.y * 0.3 - 2, -20);
     }
 
     this.renderer.render(this.scene, this.camera);
