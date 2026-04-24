@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GameEngine, GameState } from './game/GameEngine';
 import { Trophy, Timer, Coins, ChevronRight, Play, RefreshCw, AlertTriangle } from 'lucide-react';
@@ -70,10 +70,12 @@ export default function App() {
                     {gameState.score.toString().padStart(6, '0')}
                   </div>
                 </div>
-                <div className="relative flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-4 border-slate-700 p-3 md:p-4 shadow-[4px_4px_0_0_rgba(51,65,85,1)]">
-                  <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-300 font-bold mb-0.5 md:mb-1 text-center sm:text-left">TIME</div>
-                  <div className={`text-2xl md:text-5xl font-mono font-black leading-none text-center sm:text-left ${gameState.timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-orange-400'}`}>
-                    {Math.max(0, gameState.timeLeft).toFixed(1)}<span className="text-lg md:text-2xl ml-0.5">s</span>
+                <div className={`relative flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-4 ${gameState.isBossFight ? 'border-red-500 shadow-[4px_4px_0_0_rgba(239,68,68,0.5)]' : 'border-slate-700 shadow-[4px_4px_0_0_rgba(51,65,85,1)]'} p-3 md:p-4 transition-colors duration-500`}>
+                  <div className={`text-[10px] md:text-xs uppercase tracking-widest font-bold mb-0.5 md:mb-1 text-center sm:text-left ${gameState.isBossFight ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
+                    {gameState.isBossFight ? 'SURVIVE!' : 'TIME'}
+                  </div>
+                  <div className={`text-2xl md:text-5xl font-mono font-black leading-none text-center sm:text-left ${gameState.isBossFight ? 'text-red-500 scale-110 origin-left transition-transform' : (gameState.timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-orange-400')}`}>
+                    {Math.max(0, gameState.isBossFight ? gameState.bossTimeLeft : gameState.timeLeft).toFixed(1)}<span className="text-lg md:text-2xl ml-0.5">s</span>
                   </div>
                   <AnimatePresence>
                     {showTimeBonus && (
@@ -82,7 +84,7 @@ export default function App() {
                         animate={{ opacity: 0, scale: 2, y: -40 }}
                         className="absolute top-2 right-2 font-black text-emerald-400 pointer-events-none text-xs md:text-base"
                       >
-                        +10s
+                        +5s
                       </motion.span>
                     )}
                   </AnimatePresence>

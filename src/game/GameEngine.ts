@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { EnvironmentManager } from './EnvironmentManager';
 
 export interface GameState {
   score: number;
@@ -10,6 +11,8 @@ export interface GameState {
   stage: 'Meadow' | 'Ocean' | 'City' | 'Space';
   coinsCollected: number;
   survivedTime: number;
+  isBossFight: boolean;
+  bossTimeLeft: number;
 }
 
 export class GameEngine {
@@ -43,10 +46,18 @@ export class GameEngine {
   private obstacles: THREE.Object3D[] = [];
   private coins: THREE.Object3D[] = [];
   
-  // Instanced Meshes for Environment
-  private treeTrunks?: THREE.InstancedMesh;
-  private treeLeaves?: THREE.InstancedMesh;
-  private treeData: {x:number, y:number, z:number, scale:number}[] = [];
+  // Boss state
+  private hasFoughtBoss = false;
+  private bossGroup?: THREE.Group;
+  private bossGuideLaser?: THREE.Mesh;
+  private bossState: 'idle' | 'aiming' | 'dashing' | 'exiting' = 'idle';
+  private bossActionTimer: number = 0;
+  private bossTargetPos: THREE.Vector3 = new THREE.Vector3();
+  
+  private bossShotCount: number = 1;
+  private bossProjectiles: { mesh: THREE.Mesh; velocity: THREE.Vector3 }[] = [];
+  
+  private envManager!: EnvironmentManager;
   
   // Speed Trails
   private speedLines?: THREE.InstancedMesh;
@@ -58,7 +69,7 @@ export class GameEngine {
   private audioCtx?: AudioContext;
   private comboStreak = 0;
   private lastCollectTime = 0;
-  private particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
+  private particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number; isHarmful?: boolean }[] = [];
   private uiContainer: HTMLElement;
   private cameraShakeIntensity = 0;
 
@@ -133,6 +144,8 @@ export class GameEngine {
       stage: 'Meadow',
       coinsCollected: 0,
       survivedTime: 0,
+      isBossFight: false,
+      bossTimeLeft: 0,
     };
   }
 
@@ -199,51 +212,15 @@ export class GameEngine {
   }
 
   private initWorld() {
-    // Basic floor for Meadow
-    const floorGeom = new THREE.PlaneGeometry(1000, 1000);
-    const floorMat = new THREE.MeshPhongMaterial({ color: 0x2d8a4e, flatShading: true });
-    const floor = new THREE.Mesh(floorGeom, floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -10;
-    floor.receiveShadow = true;
-    this.scene.add(floor);
-    
-    // Instanced Trees
-    const treeCount = 150;
-    const trunkGeom = new THREE.CylinderGeometry(0.3, 0.5, 1.5, 5);
-    const leavesGeom = new THREE.DodecahedronGeometry(2, 0);
-    const trunkMat = new THREE.MeshPhongMaterial({ color: 0x5a4325, flatShading: true });
-    const leavesMat = new THREE.MeshPhongMaterial({ color: 0x3a9e5b, flatShading: true });
-    
-    this.treeTrunks = new THREE.InstancedMesh(trunkGeom, trunkMat, treeCount);
-    this.treeLeaves = new THREE.InstancedMesh(leavesGeom, leavesMat, treeCount);
-    this.treeTrunks.castShadow = true;
-    this.treeLeaves.castShadow = true;
-    
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < treeCount; i++) {
-      const x = (Math.random() - 0.5) * 150;
-      const z = -Math.random() * 300;
-      const scale = 0.6 + Math.random() * 0.8;
-      this.treeData.push({ x, y: -10, z, scale });
-      
-      dummy.position.set(x, -10 + 0.75 * scale, z);
-      dummy.scale.set(scale, scale, scale);
-      dummy.updateMatrix();
-      this.treeTrunks.setMatrixAt(i, dummy.matrix);
-      
-      dummy.position.set(x, -10 + 2.5 * scale, z);
-      dummy.updateMatrix();
-      this.treeLeaves.setMatrixAt(i, dummy.matrix);
-    }
-    this.scene.add(this.treeTrunks);
-    this.scene.add(this.treeLeaves);
+    this.envManager = new EnvironmentManager(this.scene);
+    this.envManager.setStage(this.state?.stage || 'Meadow');
 
     // Speed lines (InstancedMesh)
     const lineCount = 100;
     const lineGeom = new THREE.BoxGeometry(0.1, 0.1, 4);
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2 });
     this.speedLines = new THREE.InstancedMesh(lineGeom, lineMat, lineCount);
+    const dummy = new THREE.Object3D();
     for(let i=0; i<lineCount; i++) {
       const x = (Math.random() - 0.5) * 60;
       const y = (Math.random() - 0.5) * 40;
@@ -305,6 +282,217 @@ export class GameEngine {
 
     group.userData = { isCoin: true, type, radius: 2, mesh: coin }; // Generous hitbox
     return group;
+  }
+
+  private startBossFight() {
+    this.hasFoughtBoss = true;
+    this.state.isBossFight = true;
+    this.state.bossTimeLeft = 10;
+    
+    // Create Boss Model (Faceted Phoenix - Low poly)
+    this.bossGroup = new THREE.Group();
+    const scale = 5;
+    
+    // Phoenix Body (crystalline/faceted cone)
+    const bodyGeom = new THREE.ConeGeometry(0.8 * scale, 3 * scale, 6);
+    const bodyMat = new THREE.MeshPhongMaterial({ 
+        color: 0xff3300, 
+        emissive: 0xaa2200, 
+        flatShading: true,
+        transparent: true,
+        opacity: 0.9
+    });
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.rotation.x = -Math.PI / 2;
+    
+    // Phoenix Wings (faceted irregular shapes)
+    // Custom shape for a fiery wing
+    const wingShape = new THREE.Shape([
+        new THREE.Vector2(0, 0),
+        new THREE.Vector2(3, -0.5),
+        new THREE.Vector2(3.5, 1),
+        new THREE.Vector2(1.5, 0.5),
+        new THREE.Vector2(0.5, 2),
+    ]);
+    const wingGeom = new THREE.ExtrudeGeometry(wingShape, { depth: 0.2 * scale, bevelEnabled: false });
+    // Center the wing geometry
+    wingGeom.translate(0, 0, -0.1 * scale);
+
+    const wingMat = new THREE.MeshPhongMaterial({ 
+        color: 0xffaa00, 
+        emissive: 0xdd4400, 
+        flatShading: true,
+        side: THREE.DoubleSide 
+    });
+    
+    const leftWing = new THREE.Mesh(wingGeom, wingMat);
+    leftWing.scale.set(scale * 0.8, scale * 0.8, scale * 0.8);
+    leftWing.position.set(0.5 * scale, 0, 0);
+
+    const rightWing = new THREE.Mesh(wingGeom, wingMat);
+    rightWing.scale.set(scale * 0.8, scale * 0.8, scale * 0.8);
+    rightWing.rotation.x = Math.PI; // flip
+    rightWing.position.set(-0.5 * scale, 0, 0);
+    
+    const leftPivot = new THREE.Group();
+    leftPivot.position.set(0.2 * scale, 0, 0.2 * scale);
+    leftPivot.add(leftWing);
+    
+    const rightPivot = new THREE.Group();
+    rightPivot.position.set(-0.2 * scale, 0, 0.2 * scale);
+    rightPivot.add(rightWing);
+    
+    // Intense Point Light to illuminate trees red
+    const bossLight = new THREE.PointLight(0xff2200, 10, 100);
+    
+    this.bossGroup.add(body, leftPivot, rightPivot, bossLight);
+    this.bossGroup.userData = { radius: 2.0 * scale, leftWing: leftPivot, rightWing: rightPivot };
+    
+    // Position boss in front of camera
+    this.bossGroup.position.set(0, 10, -80);
+    this.bossGroup.rotation.y = Math.PI; // Face the player
+    this.worldObjects.add(this.bossGroup);
+    
+    this.bossState = 'aiming'; // We'll repurpose 'aiming' as 'active' for this step, or rename. Let's just use 'aiming' for active state.
+    this.bossActionTimer = 0;
+    this.bossShotCount = 1;
+  }
+
+  private updateBossFight(delta: number) {
+    if (!this.bossGroup) return;
+
+    // Wing flap animation
+    const time = this.clock.getElapsedTime();
+    const lw = this.bossGroup.userData.leftWing;
+    const rw = this.bossGroup.userData.rightWing;
+    if (lw && rw) {
+       lw.rotation.y = Math.sin(time * 15) * 0.3;
+       rw.rotation.y = -Math.sin(time * 15) * 0.3;
+    }
+
+    // Fire trail particles
+    if (Math.random() < 0.8) {
+        const geom = new THREE.BoxGeometry(2, 2, 2);
+        // Random orange/yellow/red color
+        const colors = [0xff2200, 0xff7700, 0xffaa00];
+        const mat = new THREE.MeshBasicMaterial({ 
+            color: colors[Math.floor(Math.random() * colors.length)], 
+            transparent: true, 
+            opacity: 0.8 
+        });
+        const p = new THREE.Mesh(geom, mat);
+        p.position.copy(this.bossGroup.position);
+        
+        // Spread a bit behind and around
+        p.position.x += (Math.random() - 0.5) * 4;
+        p.position.y += (Math.random() - 0.5) * 4;
+        p.position.z += 2; 
+
+        // Particles float up and move towards player's world z (which is effectively positive z in local)
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 5,
+            (Math.random() - 0.1) * 10,
+            20 // Move towards player so it acts as an obstacle or just a visual trail that passes
+        );
+        this.worldObjects.add(p);
+        this.particles.push({ mesh: p, velocity, life: 1.5, isHarmful: true });
+    }
+
+    this.bossActionTimer += delta;
+
+    switch (this.bossState) {
+      case 'aiming':
+        // Boss moves in a pattern in front of player
+        this.bossGroup.position.x = Math.sin(time * 2) * 15;
+        this.bossGroup.position.y = 10 + Math.sin(time * 3) * 3;
+        // Ensure boss stays firmly at z = -80 relative to the world, but since plane is at z=0, just fix it at -80.
+        this.bossGroup.position.z = -80;
+
+        // Shoot projectiles
+        if (this.bossActionTimer > 0.8) {
+          this.bossActionTimer = 0;
+          this.fireBossProjectile();
+          this.bossShotCount++;
+        }
+        break;
+
+      case 'exiting':
+        this.bossGroup.position.y += delta * 20; // Fly up
+        this.bossGroup.position.z -= delta * 50;
+        if (this.bossGroup.position.y > 100) {
+            this.worldObjects.remove(this.bossGroup);
+            this.bossGroup = undefined;
+        }
+        break;
+    }
+
+    // Update projectiles
+    const moveSpeed = 50 * this.state.gameSpeed * delta;
+    for (let i = this.bossProjectiles.length - 1; i >= 0; i--) {
+        const proj = this.bossProjectiles[i];
+        
+        // Projectile moves towards player based on velocity, PLUS the world movement speed coming at player
+        proj.mesh.position.addScaledVector(proj.velocity, delta);
+        proj.mesh.position.z += moveSpeed;
+
+        // Collision check with plane
+        const distZ = Math.abs(proj.mesh.position.z - this.plane.position.z);
+        const distXY = Math.hypot(proj.mesh.position.x - this.plane.position.x, proj.mesh.position.y - this.plane.position.y);
+        
+        if (distZ < 3 && distXY < 2.5) {
+            this.onCrash();
+        }
+
+        // Clean up if passed player
+        if (proj.mesh.position.z > 20) {
+            this.worldObjects.remove(proj.mesh);
+            this.bossProjectiles.splice(i, 1);
+        }
+    }
+  }
+
+  private fireBossProjectile() {
+    if (!this.bossGroup) return;
+
+    const target = this.plane.position.clone();
+    const baseDirection = new THREE.Vector3().subVectors(target, this.bossGroup.position).normalize();
+    const projSpeed = 40;
+    const spreadAngle = Math.PI / 4; // 45 degrees spread total
+    const count = this.bossShotCount;
+
+    for (let i = 0; i < count; i++) {
+        const projGeom = new THREE.SphereGeometry(1.5, 16, 16);
+        const projMat = new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0xaa0000 });
+        const mesh = new THREE.Mesh(projGeom, projMat);
+        
+        // Spawn at boss position
+        mesh.position.copy(this.bossGroup.position);
+        this.worldObjects.add(mesh);
+
+        let angleOffset = 0;
+        if (count > 1) {
+             const t = i / (count - 1); // 0 to 1
+             angleOffset = -spreadAngle/2 + t * spreadAngle;
+        }
+
+        // Apply spread by rotating around the Y axis
+        const axis = new THREE.Vector3(0, 1, 0);
+        const direction = baseDirection.clone().applyAxisAngle(axis, angleOffset);
+        
+        const velocity = direction.multiplyScalar(projSpeed);
+
+        this.bossProjectiles.push({ mesh, velocity });
+    }
+  }
+
+  private endBossFight() {
+    this.state.isBossFight = false;
+    this.bossState = 'exiting';
+    this.state.stage = 'Ocean';
+    this.envManager.setStage(this.state.stage);
+    
+    this.state.timeLeft += 5; // Bonus
+    this.onStateUpdate(this.state);
   }
 
   private createObstacle() {
@@ -412,10 +600,32 @@ export class GameEngine {
   public start() {
     this.initAudio();
     this.state = this.getInitialState();
+    this.envManager.setStage(this.state.stage, true);
     this.gameActive = true;
     this.isCrashingSequence = false;
     this.crashTimer = 0;
-    if (this.plane) this.plane.visible = true;
+    this.targetX = 0;
+    this.targetY = 0;
+    this.touchStartPoint.set(0, 0);
+    this.initialTargetAtStart.set(0, 0);
+    this.mouse.set(0, 0);
+    this.hasFoughtBoss = false;
+    if (this.bossGroup) {
+      this.worldObjects.remove(this.bossGroup);
+      this.bossGroup = undefined;
+    }
+    for (const proj of this.bossProjectiles) {
+        this.worldObjects.remove(proj.mesh);
+    }
+    this.bossProjectiles = [];
+    this.bossState = 'idle';
+    this.bossActionTimer = 0;
+    
+    if (this.plane) {
+        this.plane.position.set(0, 0, 0);
+        this.plane.rotation.set(0, 0, 0);
+        this.plane.visible = true;
+    }
     this.lastDifficultyIncrease = this.clock.getElapsedTime();
     this.worldObjects.clear();
     this.obstacles = [];
@@ -497,11 +707,21 @@ export class GameEngine {
   private updateLogic(delta: number) {
     if (this.state.isGameOver || !this.gameActive) return;
 
-    // Timer
-    this.state.timeLeft -= delta;
-    this.state.survivedTime += delta;
+    if (!this.state.isBossFight) {
+      // Normal Timer
+      this.state.timeLeft -= delta;
+      this.state.survivedTime += delta;
+    } else {
+      // Boss Timer
+      this.state.bossTimeLeft -= delta;
+      if (this.state.bossTimeLeft <= 0 && this.bossState !== 'exiting') {
+        this.endBossFight();
+      }
+    }
     
+    // Always check for game over based on total time left (which acts as health)
     if (this.state.timeLeft <= 0) {
+      this.state.timeLeft = 0;
       this.gameOver();
       return;
     }
@@ -514,15 +734,30 @@ export class GameEngine {
     }
 
     // Stage Transitions
-    if (this.state.survivedTime > 90) this.state.stage = 'Space';
-    else if (this.state.survivedTime > 60) this.state.stage = 'City';
-    else if (this.state.survivedTime > 30) this.state.stage = 'Ocean';
+    const prevStage = this.state.stage;
+    if (this.state.stage === 'Meadow' && this.state.survivedTime >= 30 && !this.hasFoughtBoss) {
+        this.startBossFight();
+    } else if (this.state.survivedTime > 90) {
+        this.state.stage = 'Space';
+    } else if (this.state.survivedTime > 60) {
+        this.state.stage = 'City';
+    }
 
-    this.updateBackground();
+    if (prevStage !== this.state.stage) {
+       this.envManager.setStage(this.state.stage);
+    }
 
-    // Spawning frequency based on speed
-    if (Math.random() < 0.05 * this.state.gameSpeed) {
-      this.spawnObject();
+    this.updateBackground(delta);
+
+    if (this.state.isBossFight || this.bossState === 'exiting') {
+        this.updateBossFight(delta);
+    }
+    
+    if (!this.state.isBossFight) {
+        // Spawning frequency based on speed
+        if (Math.random() < 0.05 * this.state.gameSpeed) {
+          this.spawnObject();
+        }
     }
 
     // Move objects and collision
@@ -534,12 +769,12 @@ export class GameEngine {
       const objPos = obj.position;
       
       let magneticActive = false;
-      if (obj.userData.isCoin && planePos.distanceTo(objPos) < 8) {
-          // Pull coin towards the plane
-          objPos.lerp(planePos, delta * 12);
+      if (obj.userData.isCoin && planePos.distanceTo(objPos) < 10) {
+          // Pull coin towards the plane faster
+          objPos.lerp(planePos, delta * 18);
           // Scale ping effect
           const currentScale = obj.scale.x;
-          obj.scale.setScalar(Math.min(currentScale + delta * 5, 2.0));
+          obj.scale.setScalar(Math.min(currentScale + delta * 8, 2.0));
           magneticActive = true;
       }
       
@@ -547,7 +782,10 @@ export class GameEngine {
       if (!magneticActive) {
           obj.position.z += moveSpeed;
       } else {
-          obj.position.z += moveSpeed * 0.5;
+          // If it's in front of the plane, still let it come towards us quickly
+          if (obj.position.z < planePos.z) {
+             obj.position.z += moveSpeed;
+          }
       }
       
       // Convert to XY dist for chase-cam depth
@@ -555,7 +793,7 @@ export class GameEngine {
       const distZ = Math.abs(planePos.z - objPos.z);
       
       // True collision (collected)
-      if (distXY < (obj.userData.radius + 1.5) && distZ < 2) {
+      if (distXY < (obj.userData.radius + 1.5) && distZ < 3.5) {
         if (obj.userData.isCoin) {
           if (!this.isCrashingSequence) {
             this.collectCoin(obj);
@@ -564,7 +802,14 @@ export class GameEngine {
         } else {
           this.onCrash();
         }
+      } else if (distXY < 3 && distZ < 6 && obj.userData.isCoin && magneticActive) {
+         // Fallback boundary to prevent permanent orbiting
+         if (!this.isCrashingSequence) {
+            this.collectCoin(obj);
+         }
+         return;
       }
+
 
       // Cosmetic Updates
       if (obj.userData.isCoin && obj.userData.mesh) {
@@ -598,32 +843,20 @@ export class GameEngine {
             p.mesh.scale.setScalar(p.life);
             // Gravity effect on particles
             p.velocity.y -= delta * 20;
+
+            // Collision check if it's a harmful particle (like boss fire trail)
+            if (p.isHarmful && Math.abs(p.mesh.position.z - this.plane.position.z) < 2) {
+                const distXY = Math.hypot(p.mesh.position.x - this.plane.position.x, p.mesh.position.y - this.plane.position.y);
+                if (distXY < 2.5) { // Roughly plane size + particle size
+                    this.onCrash();
+                }
+            }
         }
     }
 
     // Update Environment Instanced Meshes
     const dummy = new THREE.Object3D();
-    if (this.treeTrunks && this.treeLeaves) {
-      for (let i = 0; i < this.treeData.length; i++) {
-        const t = this.treeData[i];
-        t.z += moveSpeed;
-        if (t.z > 20) {
-          t.z = -300;
-          t.x = (Math.random() - 0.5) * 150;
-        }
-        
-        dummy.position.set(t.x, t.y + 0.75 * t.scale, t.z);
-        dummy.scale.set(t.scale, t.scale, t.scale);
-        dummy.updateMatrix();
-        this.treeTrunks.setMatrixAt(i, dummy.matrix);
-        
-        dummy.position.set(t.x, t.y + 2.5 * t.scale, t.z);
-        dummy.updateMatrix();
-        this.treeLeaves.setMatrixAt(i, dummy.matrix);
-      }
-      this.treeTrunks.instanceMatrix.needsUpdate = true;
-      this.treeLeaves.instanceMatrix.needsUpdate = true;
-    }
+    this.envManager.update(moveSpeed, delta);
     
     // Update Speed Trails
     if (this.speedLines) {
@@ -777,7 +1010,7 @@ export class GameEngine {
     this.obstacles = this.obstacles.filter(o => o !== obj);
   }
 
-  private updateBackground() {
+  private updateBackground(delta: number) {
     let color: number;
     switch(this.state.stage) {
       case 'Ocean': color = 0x0ea5e9; break; // Sky blue 500
@@ -787,7 +1020,7 @@ export class GameEngine {
     }
     
     const currentColor = new THREE.Color(this.scene.background as THREE.Color);
-    currentColor.lerp(new THREE.Color(color), 0.005);
+    currentColor.lerp(new THREE.Color(color), delta * 0.5);
     this.scene.background = currentColor;
     if (this.scene.fog) {
       (this.scene.fog as THREE.Fog).color = currentColor;
@@ -831,8 +1064,13 @@ export class GameEngine {
       }
 
       // Camera Chase Tracking
+      const targetCamY = this.state.isBossFight ? 10 : 6;
+      const targetCamZ = this.state.isBossFight ? 16 : 12;
+
       this.camera.position.x += (this.plane.position.x * 0.5 - this.camera.position.x) * 0.1;
-      this.camera.position.y += ((this.plane.position.y * 0.3 + 6) - this.camera.position.y) * 0.1;
+      this.camera.position.y += ((this.plane.position.y * 0.3 + targetCamY) - this.camera.position.y) * 0.1;
+      this.camera.position.z += (targetCamZ - this.camera.position.z) * 0.05;
+      
       this.camera.lookAt(this.plane.position.x * 0.3, this.plane.position.y * 0.3 - 2, -20);
       
       // Apply Camera Shake (use rawDelta so shake is fast)
