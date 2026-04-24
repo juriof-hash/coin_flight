@@ -397,7 +397,20 @@ export class GameEngine {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  private initAudio() {
+    if (!this.audioCtx) {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContext) {
+        this.audioCtx = new AudioContext();
+      }
+    }
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume().catch(console.error);
+    }
+  }
+
   public start() {
+    this.initAudio();
     this.state = this.getInitialState();
     this.gameActive = true;
     this.isCrashingSequence = false;
@@ -411,11 +424,7 @@ export class GameEngine {
   }
 
   private playCrashSound() {
-    if (!this.audioCtx) {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioContext) this.audioCtx = new AudioContext();
-    }
-    
+    this.initAudio();
     if (!this.audioCtx) return;
 
     const osc = this.audioCtx.createOscillator();
@@ -645,11 +654,7 @@ export class GameEngine {
 
   // --- JUICE: AUDIO ---
   private playCollectSound() {
-    if (!this.audioCtx) {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioContext) this.audioCtx = new AudioContext();
-    }
-    
+    this.initAudio();
     if (!this.audioCtx) return;
 
     const now = performance.now();
