@@ -67,6 +67,9 @@ export class GameEngine {
   
   // Juice / Game Feel
   private audioCtx?: AudioContext;
+  private audioListener!: THREE.AudioListener;
+  private bossBGM?: THREE.Audio;
+  private projectileSFX?: THREE.Audio;
   private comboStreak = 0;
   private lastCollectTime = 0;
   private particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number; isHarmful?: boolean }[] = [];
@@ -100,6 +103,28 @@ export class GameEngine {
     this.camera = new THREE.PerspectiveCamera(85, window.innerWidth / window.innerHeight, 0.1, 1000);
     this.camera.position.set(0, 6, 12);
     this.camera.lookAt(0, -2, -20);
+    
+    // Setup Audio Listener & Sounds
+    this.audioListener = new THREE.AudioListener();
+    this.camera.add(this.audioListener);
+
+    this.bossBGM = new THREE.Audio(this.audioListener);
+    this.projectileSFX = new THREE.Audio(this.audioListener);
+
+    const audioLoader = new THREE.AudioLoader();
+    audioLoader.load('/bgm/boss1.mp3', (buffer) => {
+        if (this.bossBGM) {
+            this.bossBGM.setBuffer(buffer);
+            this.bossBGM.setLoop(true);
+            this.bossBGM.setVolume(0);
+        }
+    });
+    audioLoader.load('/sfx/1.m4a', (buffer) => {
+        if (this.projectileSFX) {
+            this.projectileSFX.setBuffer(buffer);
+            this.projectileSFX.setVolume(0.5);
+        }
+    });
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -121,11 +146,17 @@ export class GameEngine {
     
     // Attach input listeners to the canvas element to avoid blocking UI interactions
     canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
-    canvas.addEventListener('mousedown', () => this.isMouseActive = true);
+    canvas.addEventListener('mousedown', () => {
+        this.isMouseActive = true;
+        this.initAudio();
+    });
     
     window.addEventListener('mouseup', () => this.isMouseActive = false);
     
-    canvas.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
+    canvas.addEventListener('touchstart', (e: TouchEvent) => {
+        this.initAudio();
+        this.onTouchStart(e);
+    }, { passive: false });
     canvas.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
     canvas.addEventListener('touchend', this.onTouchEnd.bind(this));
     canvas.addEventListener('touchcancel', this.onTouchEnd.bind(this));
@@ -288,6 +319,17 @@ export class GameEngine {
     this.hasFoughtBoss = true;
     this.state.isBossFight = true;
     this.state.bossTimeLeft = 10;
+    
+    // Crossfade BGM
+    this.initAudio();
+    if (this.bossBGM && !this.bossBGM.isPlaying && this.bossBGM.buffer) {
+       this.bossBGM.setVolume(0);
+       this.bossBGM.play();
+       const ctx = this.audioListener.context;
+       this.bossBGM.gain.gain.cancelScheduledValues(ctx.currentTime);
+       this.bossBGM.gain.gain.setValueAtTime(0, ctx.currentTime);
+       this.bossBGM.gain.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.5);
+    }
     
     // Create Boss Model (Faceted Phoenix - Low poly)
     this.bossGroup = new THREE.Group();
@@ -454,6 +496,11 @@ export class GameEngine {
   private fireBossProjectile() {
     if (!this.bossGroup) return;
 
+    if (this.projectileSFX && this.projectileSFX.buffer) {
+        if (this.projectileSFX.isPlaying) this.projectileSFX.stop();
+        this.projectileSFX.play();
+    }
+
     const target = this.plane.position.clone();
     const baseDirection = new THREE.Vector3().subVectors(target, this.bossGroup.position).normalize();
     const projSpeed = 40;
@@ -493,6 +540,17 @@ export class GameEngine {
     
     this.state.timeLeft += 5; // Bonus
     this.onStateUpdate(this.state);
+
+    if (this.bossBGM && this.bossBGM.isPlaying) {
+      const ctx = this.audioListener.context;
+      const currentVol = this.bossBGM.getVolume();
+      this.bossBGM.gain.gain.cancelScheduledValues(ctx.currentTime);
+      this.bossBGM.gain.gain.setValueAtTime(currentVol, ctx.currentTime);
+      this.bossBGM.gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.5); // WebAudio doesn't like ramping to exact 0 sometimes
+      setTimeout(() => {
+          this.bossBGM?.stop();
+      }, 500);
+    }
   }
 
   private createObstacle() {
@@ -594,6 +652,9 @@ export class GameEngine {
     }
     if (this.audioCtx && this.audioCtx.state === 'suspended') {
       this.audioCtx.resume().catch(console.error);
+    }
+    if (this.audioListener.context.state === 'suspended') {
+      this.audioListener.context.resume().catch(console.error);
     }
   }
 
