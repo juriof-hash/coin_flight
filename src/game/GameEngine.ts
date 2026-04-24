@@ -50,6 +50,14 @@ export class GameEngine {
   
   private propeller?: THREE.Mesh;
   
+  // Juice / Game Feel
+  private audioCtx?: AudioContext;
+  private comboStreak = 0;
+  private lastCollectTime = 0;
+  private particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
+  private uiContainer: HTMLElement;
+  private cameraShakeIntensity = 0;
+
   private lastDifficultyIncrease = 0;
   private lastStateUpdateTime = 0;
   private gameActive = false;
@@ -58,6 +66,17 @@ export class GameEngine {
     this.onStateUpdate = onStateUpdate;
     this.state = this.getInitialState();
     
+    // UI Container for floating text
+    this.uiContainer = document.createElement('div');
+    this.uiContainer.style.position = 'absolute';
+    this.uiContainer.style.top = '0';
+    this.uiContainer.style.left = '0';
+    this.uiContainer.style.width = '100%';
+    this.uiContainer.style.height = '100%';
+    this.uiContainer.style.pointerEvents = 'none';
+    this.uiContainer.style.overflow = 'hidden';
+    container.appendChild(this.uiContainer);
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87ceeb);
     this.scene.fog = new THREE.Fog(0x87ceeb, 20, 150);
@@ -426,28 +445,44 @@ export class GameEngine {
     // Move objects and collision
     const moveSpeed = 50 * this.state.gameSpeed * delta;
     
-    [...this.coins, ...this.obstacles].forEach((obj, idx) => {
-      obj.position.z += moveSpeed;
-      
-      // Collision detection
+    [...this.coins, ...this.obstacles].forEach((obj) => {
+      // Magnetic effect for coins
       const planePos = this.plane.position;
       const objPos = obj.position;
-      // Convert to XY dist for chase-cam depth (objects zip past z)
+      
+      let magneticActive = false;
+      if (obj.userData.isCoin && planePos.distanceTo(objPos) < 8) {
+          // Pull coin towards the plane
+          objPos.lerp(planePos, delta * 12);
+          // Scale ping effect
+          const currentScale = obj.scale.x;
+          obj.scale.setScalar(Math.min(currentScale + delta * 5, 2.0));
+          magneticActive = true;
+      }
+      
+      // Only move by world speed if not being magnetically pulled strongly
+      if (!magneticActive) {
+          obj.position.z += moveSpeed;
+      } else {
+          obj.position.z += moveSpeed * 0.5;
+      }
+      
+      // Convert to XY dist for chase-cam depth
       const distXY = Math.sqrt(Math.pow(planePos.x - objPos.x, 2) + Math.pow(planePos.y - objPos.y, 2));
       const distZ = Math.abs(planePos.z - objPos.z);
       
-      // Hitbox is slightly elongated on Z
+      // True collision (collected)
       if (distXY < (obj.userData.radius + 1.5) && distZ < 2) {
         if (obj.userData.isCoin) {
-          this.collectCoin(obj.userData.type);
-          this.removeObject(obj);
+          this.collectCoin(obj);
+          return; // Object is removed
         } else {
           this.gameOver();
         }
       }
 
-      // Coin Rotation & Bird Flapping
-      if (obj.userData.isCoin) {
+      // Cosmetic Updates
+      if (obj.userData.isCoin && obj.userData.mesh) {
         obj.userData.mesh.rotation.y += delta * 3;
       }
       if (obj.userData.isObstacle && obj.userData.leftWing) {
@@ -456,11 +491,30 @@ export class GameEngine {
         obj.userData.rightWing.rotation.z = -flap;
       }
 
-      // Cleanup
+      // Cleanup if missed
       if (obj.position.z > 30) {
         this.removeObject(obj);
       }
     });
+
+    // Update Particles
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+        const p = this.particles[i];
+        p.life -= delta * 1.5;
+        if (p.life <= 0) {
+            this.worldObjects.remove(p.mesh);
+            p.mesh.geometry.dispose();
+            (p.mesh.material as THREE.Material).dispose();
+            this.particles.splice(i, 1);
+        } else {
+            p.mesh.position.addScaledVector(p.velocity, delta);
+            p.mesh.rotation.x += delta * Math.random() * 5;
+            p.mesh.rotation.y += delta * Math.random() * 5;
+            p.mesh.scale.setScalar(p.life);
+            // Gravity effect on particles
+            p.velocity.y -= delta * 20;
+        }
+    }
 
     // Update Environment Instanced Meshes
     const dummy = new THREE.Object3D();
@@ -513,17 +567,127 @@ export class GameEngine {
     }
   }
 
-  private collectCoin(type: string) {
+  // --- JUICE: AUDIO ---
+  private playCollectSound() {
+    if (!this.audioCtx) {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContext) this.audioCtx = new AudioContext();
+    }
+    
+    if (!this.audioCtx) return;
+
+    const now = performance.now();
+    if (now - this.lastCollectTime < 1000) {
+      this.comboStreak = Math.min(this.comboStreak + 1, 10);
+    } else {
+      this.comboStreak = 0;
+    }
+    this.lastCollectTime = now;
+    
+    const osc = this.audioCtx.createOscillator();
+    const gain = this.audioCtx.createGain();
+    
+    const pitch = 1.0 + (this.comboStreak * 0.1);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(600 * pitch, this.audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1200 * pitch, this.audioCtx.currentTime + 0.1);
+    
+    gain.gain.setValueAtTime(0.3, this.audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.1);
+    
+    osc.connect(gain);
+    gain.connect(this.audioCtx.destination);
+    
+    osc.start();
+    osc.stop(this.audioCtx.currentTime + 0.1);
+  }
+
+  // --- JUICE: PARTICLES ---
+  private createCoinParticles(pos: THREE.Vector3, color: number) {
+    const geom = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+    const mat = new THREE.MeshPhongMaterial({ color, flatShading: true });
+    
+    for (let i = 0; i < 6; i++) {
+        const p = new THREE.Mesh(geom, mat);
+        p.position.copy(pos);
+        
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 40,
+            (Math.random() - 0.5) * 40,
+            (Math.random() - 0.5) * 40
+        );
+        this.worldObjects.add(p);
+        this.particles.push({ mesh: p, velocity, life: 1.0 });
+    }
+  }
+
+  // --- JUICE: FLOATING TEXT ---
+  private showFloatingText(pos: THREE.Vector3, text: string, color: string) {
+    const p = pos.clone();
+    p.project(this.camera);
+    const x = (p.x * .5 + .5) * window.innerWidth;
+    const y = (p.y * -.5 + .5) * window.innerHeight;
+
+    const el = document.createElement('div');
+    el.textContent = text;
+    el.style.position = 'absolute';
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.color = color;
+    el.style.fontWeight = '900';
+    el.style.fontSize = '28px';
+    el.style.textShadow = '0 3px 0 #000, 3px 0 0 #000, -3px 0 0 #000, 0 -3px 0 #000';
+    el.style.transition = 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+    el.style.transform = 'translate(-50%, -50%)';
+    this.uiContainer.appendChild(el);
+
+    // trigger reflow
+    void el.offsetWidth;
+    
+    el.style.top = `${y - 120}px`;
+    el.style.opacity = '0';
+    
+    setTimeout(() => {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, 800);
+  }
+
+  // --- JUICE: CAMERA SHAKE ---
+  private applyCameraShake() {
+      this.cameraShakeIntensity = 0.8;
+  }
+
+  private collectCoin(obj: THREE.Object3D) {
+    const type = obj.userData.type;
+    const pos = obj.position.clone();
+    
+    this.playCollectSound();
+    
+    // Haptic feedback
+    if (window.navigator && window.navigator.vibrate) {
+      window.navigator.vibrate(10);
+    }
+
     if (type === 'red') {
       this.state.timeLeft += 10;
       this.state.score += 5; // Bonus
+      this.applyCameraShake();
+      this.createCoinParticles(pos, 0xef4444);
+      this.showFloatingText(pos, '+10s / +5', '#ef4444');
     } else if (type === 'gold') {
       this.state.score += 2;
       this.state.coinsCollected += 2;
+      this.applyCameraShake();
+      this.createCoinParticles(pos, 0xfacc15);
+      this.showFloatingText(pos, '+2', '#facc15');
     } else {
       this.state.score += 1;
       this.state.coinsCollected += 1;
+      this.createCoinParticles(pos, 0x94a3b8);
+      this.showFloatingText(pos, '+1', '#ffffff');
     }
+    
+    this.removeObject(obj);
   }
 
   private removeObject(obj: THREE.Object3D) {
@@ -578,6 +742,13 @@ export class GameEngine {
       this.camera.position.x += (this.plane.position.x * 0.5 - this.camera.position.x) * 0.1;
       this.camera.position.y += ((this.plane.position.y * 0.3 + 6) - this.camera.position.y) * 0.1;
       this.camera.lookAt(this.plane.position.x * 0.3, this.plane.position.y * 0.3 - 2, -20);
+      
+      // Apply Camera Shake
+      if (this.cameraShakeIntensity > 0) {
+        this.camera.position.x += (Math.random() - 0.5) * this.cameraShakeIntensity;
+        this.camera.position.y += (Math.random() - 0.5) * this.cameraShakeIntensity;
+        this.cameraShakeIntensity = Math.max(0, this.cameraShakeIntensity - delta * 4);
+      }
     }
 
     this.renderer.render(this.scene, this.camera);
