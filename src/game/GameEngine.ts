@@ -6,6 +6,7 @@ export interface GameState {
   gameSpeed: number;
   distance: number;
   isGameOver: boolean;
+  isCrashing: boolean;
   stage: 'Meadow' | 'Ocean' | 'City' | 'Space';
   coinsCollected: number;
   survivedTime: number;
@@ -24,6 +25,9 @@ export class GameEngine {
   private isTouching = false;
   private isMouseActive = false;
   
+  private isCrashingSequence = false;
+  private crashTimer = 0;
+
   private targetX = 0;
   private targetY = 0;
   
@@ -125,6 +129,7 @@ export class GameEngine {
       gameSpeed: 1.0,
       distance: 0,
       isGameOver: false,
+      isCrashing: false,
       stage: 'Meadow',
       coinsCollected: 0,
       survivedTime: 0,
@@ -395,6 +400,9 @@ export class GameEngine {
   public start() {
     this.state = this.getInitialState();
     this.gameActive = true;
+    this.isCrashingSequence = false;
+    this.crashTimer = 0;
+    if (this.plane) this.plane.visible = true;
     this.lastDifficultyIncrease = this.clock.getElapsedTime();
     this.worldObjects.clear();
     this.obstacles = [];
@@ -402,8 +410,74 @@ export class GameEngine {
     this.onStateUpdate(this.state);
   }
 
+  private playCrashSound() {
+    if (!this.audioCtx) {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContext) this.audioCtx = new AudioContext();
+    }
+    
+    if (!this.audioCtx) return;
+
+    const osc = this.audioCtx.createOscillator();
+    const gain = this.audioCtx.createGain();
+    
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(150, this.audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(10, this.audioCtx.currentTime + 0.5);
+    
+    gain.gain.setValueAtTime(1.0, this.audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.5);
+    
+    osc.connect(gain);
+    gain.connect(this.audioCtx.destination);
+    
+    osc.start();
+    osc.stop(this.audioCtx.currentTime + 0.5);
+  }
+
+  private createExplosionParticles(pos: THREE.Vector3) {
+    const colors = [0xef4444, 0xf97316, 0xfacc15, 0x334155, 0xffffff];
+    const geom = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+    
+    for (let i = 0; i < 40; i++) {
+        const color = colors[Math.floor(Math.random() * colors.length)];
+        const mat = new THREE.MeshPhongMaterial({ color, flatShading: true });
+        const p = new THREE.Mesh(geom, mat);
+        p.position.copy(pos);
+        p.position.add(new THREE.Vector3((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2));
+        
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 60,
+            (Math.random() - 0.5) * 60 + 20,
+            (Math.random() - 0.5) * 60
+        );
+        this.worldObjects.add(p);
+        this.particles.push({ mesh: p, velocity, life: 2.0 });
+    }
+  }
+
+  private onCrash() {
+    if (this.isCrashingSequence) return;
+    this.isCrashingSequence = true;
+    this.crashTimer = 1.5;
+    this.state.isCrashing = true;
+    
+    this.playCrashSound();
+    
+    if (window.navigator && window.navigator.vibrate) {
+      window.navigator.vibrate([200, 100, 200]);
+    }
+
+    this.createExplosionParticles(this.plane.position);
+    this.plane.visible = false;
+    this.cameraShakeIntensity = 2.0;
+
+    this.onStateUpdate(this.state);
+  }
+
   private gameOver() {
     this.state.isGameOver = true;
+    this.state.isCrashing = false;
     this.gameActive = false;
     
     // Final score calculation
@@ -474,10 +548,12 @@ export class GameEngine {
       // True collision (collected)
       if (distXY < (obj.userData.radius + 1.5) && distZ < 2) {
         if (obj.userData.isCoin) {
-          this.collectCoin(obj);
+          if (!this.isCrashingSequence) {
+            this.collectCoin(obj);
+          }
           return; // Object is removed
         } else {
-          this.gameOver();
+          this.onCrash();
         }
       }
 
@@ -715,39 +791,50 @@ export class GameEngine {
 
   private animate() {
     requestAnimationFrame(this.animate.bind(this));
-    const delta = this.clock.getDelta();
+    const rawDelta = this.clock.getDelta();
+    let delta = rawDelta;
+
+    if (this.gameActive && this.isCrashingSequence) {
+        delta = rawDelta * 0.2; // 0.2x slow motion
+        this.crashTimer -= rawDelta;
+        if (this.crashTimer <= 0) {
+            this.gameOver();
+        }
+    }
 
     if (this.gameActive) {
       this.updateLogic(delta);
 
-      // Return to center if no active input
-      if (!this.isTouching && !this.isMouseActive) {
-        this.targetX *= 0.95;
-        this.targetY *= 0.95;
+      if (!this.isCrashingSequence) {
+        // Return to center if no active input
+        if (!this.isTouching && !this.isMouseActive) {
+          this.targetX *= 0.95;
+          this.targetY *= 0.95;
+        }
+
+        // Plane Movement Lerp
+        this.plane.position.x += (this.targetX - this.plane.position.x) * 0.1;
+        this.plane.position.y += (this.targetY - this.plane.position.y) * 0.1;
+
+        // Plane Tilting (Banking and Pitching)
+        this.plane.rotation.z = -(this.targetX - this.plane.position.x) * 0.1;
+        this.plane.rotation.x = -(this.targetY - this.plane.position.y) * 0.1;
+
+        // Propeller rotation
+        const prop = this.plane.getObjectByName('propeller');
+        if (prop) prop.rotation.z += 20 * delta;
       }
-
-      // Plane Movement Lerp
-      this.plane.position.x += (this.targetX - this.plane.position.x) * 0.1;
-      this.plane.position.y += (this.targetY - this.plane.position.y) * 0.1;
-
-      // Plane Tilting (Banking and Pitching)
-      this.plane.rotation.z = -(this.targetX - this.plane.position.x) * 0.1;
-      this.plane.rotation.x = -(this.targetY - this.plane.position.y) * 0.1;
-
-      // Propeller rotation
-      const prop = this.plane.getObjectByName('propeller');
-      if (prop) prop.rotation.z += 20 * delta;
 
       // Camera Chase Tracking
       this.camera.position.x += (this.plane.position.x * 0.5 - this.camera.position.x) * 0.1;
       this.camera.position.y += ((this.plane.position.y * 0.3 + 6) - this.camera.position.y) * 0.1;
       this.camera.lookAt(this.plane.position.x * 0.3, this.plane.position.y * 0.3 - 2, -20);
       
-      // Apply Camera Shake
+      // Apply Camera Shake (use rawDelta so shake is fast)
       if (this.cameraShakeIntensity > 0) {
         this.camera.position.x += (Math.random() - 0.5) * this.cameraShakeIntensity;
         this.camera.position.y += (Math.random() - 0.5) * this.cameraShakeIntensity;
-        this.cameraShakeIntensity = Math.max(0, this.cameraShakeIntensity - delta * 4);
+        this.cameraShakeIntensity = Math.max(0, this.cameraShakeIntensity - rawDelta * 4);
       }
     }
 

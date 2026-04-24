@@ -210,6 +210,17 @@ export default function App() {
           </motion.div>
         )}
 
+        {/* --- CRASH OVERLAY --- */}
+        {gameStarted && gameState?.isCrashing && (
+          <motion.div
+             key="crash-overlay"
+             initial={{ opacity: 0.8, backgroundColor: 'rgba(239, 68, 68, 0.8)' }}
+             animate={{ opacity: 0 }}
+             transition={{ duration: 1.5, ease: "easeOut" }}
+             className="absolute inset-0 z-40 pointer-events-none mix-blend-overlay"
+          />
+        )}
+
         {gameStarted && gameState?.isGameOver && (
           <motion.div
             key="game-over"
