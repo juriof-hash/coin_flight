@@ -48,9 +48,12 @@ export class GameEngine {
   
   // Boss state
   private hasFoughtBoss = false;
+  private hasFoughtBoss2 = false;
+  private currentBossLevel = 1;
+  private bossEvadeCount = 0;
   private bossGroup?: THREE.Group;
   private bossGuideLaser?: THREE.Mesh;
-  private bossState: 'idle' | 'aiming' | 'dashing' | 'exiting' = 'idle';
+  private bossState: 'idle' | 'aiming' | 'dashing' | 'retreating' | 'exiting' = 'idle';
   private bossActionTimer: number = 0;
   private bossTargetPos: THREE.Vector3 = new THREE.Vector3();
   
@@ -316,9 +319,19 @@ export class GameEngine {
   }
 
   private startBossFight() {
-    this.hasFoughtBoss = true;
+    if (this.currentBossLevel === 1) {
+        this.hasFoughtBoss = true;
+        this.state.bossTimeLeft = 10;
+        this.bossState = 'aiming';
+        this.bossShotCount = 1;
+    } else {
+        this.hasFoughtBoss2 = true;
+        this.state.bossTimeLeft = 999; // Using evade counting instead
+        this.bossEvadeCount = 0;
+        this.bossState = 'idle';
+        this.bossActionTimer = 0;
+    }
     this.state.isBossFight = true;
-    this.state.bossTimeLeft = 10;
     
     // Crossfade BGM
     this.initAudio();
@@ -338,10 +351,6 @@ export class GameEngine {
     this.bossGroup.position.set(0, 10, -80);
     this.bossGroup.rotation.y = Math.PI; // Face the player
     this.worldObjects.add(this.bossGroup);
-    
-    this.bossState = 'aiming'; // We'll repurpose 'aiming' as 'active' for this step, or rename. Let's just use 'aiming' for active state.
-    this.bossActionTimer = 0;
-    this.bossShotCount = 1;
   }
 
   private createPhoenix(): THREE.Group {
@@ -513,35 +522,113 @@ export class GameEngine {
 
     this.bossActionTimer += delta;
 
-    switch (this.bossState) {
-      case 'aiming':
-        // Boss moves in a pattern in front of player
-        this.bossGroup.position.x = Math.sin(time * 2) * 15;
-        this.bossGroup.position.y = 10 + Math.sin(time * 3) * 3;
-        // Ensure boss stays firmly at z = -80 relative to the world
-        this.bossGroup.position.z = -80;
-        
-        // Banking effect: tilt body based on horizontal velocity
-        // velocityX = derivative of Math.sin(time * 2) * 15 = Math.cos(time * 2) * 30
-        const velocityX = Math.cos(time * 2) * 30;
-        this.bossGroup.rotation.z = -velocityX * 0.015;
-
-        // Shoot projectiles
-        if (this.bossActionTimer > 0.8) {
-          this.bossActionTimer = 0;
-          this.fireBossProjectile();
-          this.bossShotCount++;
+    if (this.currentBossLevel === 1) {
+        switch (this.bossState) {
+          case 'aiming':
+            // Boss moves in a pattern in front of player
+            this.bossGroup.position.x = Math.sin(time * 2) * 15;
+            this.bossGroup.position.y = 10 + Math.sin(time * 3) * 3;
+            // Ensure boss stays firmly at z = -80 relative to the world
+            this.bossGroup.position.z = -80;
+            
+            // Banking effect: tilt body based on horizontal velocity
+            // velocityX = derivative of Math.sin(time * 2) * 15 = Math.cos(time * 2) * 30
+            const velocityX = Math.cos(time * 2) * 30;
+            this.bossGroup.rotation.z = -velocityX * 0.015;
+    
+            // Shoot projectiles
+            if (this.bossActionTimer > 0.8) {
+              this.bossActionTimer = 0;
+              this.fireBossProjectile();
+              this.bossShotCount++;
+            }
+            break;
+    
+          case 'exiting':
+            this.bossGroup.position.y += delta * 20; // Fly up
+            this.bossGroup.position.z -= delta * 50;
+            if (this.bossGroup.position.y > 100) {
+                this.worldObjects.remove(this.bossGroup);
+                this.bossGroup = undefined;
+            }
+            break;
         }
-        break;
+    } else {
+        // Level 2 Boss Logic (Direct Dash Attack)
+        switch (this.bossState) {
+            case 'idle':
+                // Hover at start position
+                this.bossGroup.position.x = Math.sin(time * 2) * 8; 
+                this.bossGroup.position.y = 10 + Math.sin(time * 3) * 2;
+                this.bossGroup.position.z = -80;
+                const vX = Math.cos(time * 2) * 16;
+                this.bossGroup.rotation.z = -vX * 0.015;
 
-      case 'exiting':
-        this.bossGroup.position.y += delta * 20; // Fly up
-        this.bossGroup.position.z -= delta * 50;
-        if (this.bossGroup.position.y > 100) {
-            this.worldObjects.remove(this.bossGroup);
-            this.bossGroup = undefined;
+                // Prepare to dash after 2 seconds
+                if (this.bossActionTimer > 2.0) {
+                    this.bossState = 'dashing';
+                    this.bossActionTimer = 0;
+                    this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                }
+                break;
+            case 'dashing':
+                // Rapidly move toward player
+                const dashSpeed = 150 * delta;
+                const distToTarget = this.bossGroup.position.distanceTo(this.bossTargetPos);
+                
+                if (distToTarget > dashSpeed) {
+                    const dir = this.bossTargetPos.clone().sub(this.bossGroup.position).normalize();
+                    this.bossGroup.position.add(dir.multiplyScalar(dashSpeed));
+                } else {
+                    this.bossGroup.position.copy(this.bossTargetPos);
+                }
+
+                // Check collision with player
+                // Using plane local world space
+                if (this.bossGroup.position.z > -15 && this.bossGroup.position.z < 15) {
+                    const dx = this.bossGroup.position.x - this.plane.position.x;
+                    const dy = this.bossGroup.position.y - this.plane.position.y;
+                    if (Math.hypot(dx, dy) < 4.5) { // Boss hit radius
+                        this.gameOver();
+                    }
+                }
+
+                // Passed the player -> retreat
+                if (this.bossGroup.position.z >= 10) {
+                    this.bossState = 'retreating';
+                    this.bossActionTimer = 0;
+                }
+                break;
+            case 'retreating':
+                // Move back to starting z
+                const returnSpeed = 120 * delta;
+                const retTarget = new THREE.Vector3(0, 10, -80);
+                const retDist = this.bossGroup.position.distanceTo(retTarget);
+                
+                if (retDist > returnSpeed) {
+                    const dir = retTarget.clone().sub(this.bossGroup.position).normalize();
+                    this.bossGroup.position.add(dir.multiplyScalar(returnSpeed));
+                } else {
+                    this.bossGroup.position.copy(retTarget);
+                    // Cycle complete
+                    this.bossEvadeCount++;
+                    if (this.bossEvadeCount >= 5) {
+                        this.endBossFight();
+                    } else {
+                        this.bossState = 'idle';
+                        this.bossActionTimer = 0;
+                    }
+                }
+                break;
+            case 'exiting':
+                this.bossGroup.position.y += delta * 20;
+                this.bossGroup.position.z -= delta * 50;
+                if (this.bossGroup.position.y > 100) {
+                    this.worldObjects.remove(this.bossGroup);
+                    this.bossGroup = undefined;
+                }
+                break;
         }
-        break;
     }
 
     // Update projectiles
@@ -611,21 +698,20 @@ export class GameEngine {
   private endBossFight() {
     this.state.isBossFight = false;
     this.bossState = 'exiting';
-    this.state.stage = 'Ocean';
+    if (this.currentBossLevel === 1) {
+        this.state.stage = 'Ocean';
+    } else {
+        this.state.stage = 'City';
+        // Bonus for defeating Stage 2 boss
+        this.state.timeLeft += 5; 
+    }
     this.envManager.setStage(this.state.stage);
     
     this.state.timeLeft += 5; // Bonus
     this.onStateUpdate(this.state);
 
     if (this.bossBGM && this.bossBGM.isPlaying) {
-      const ctx = this.audioListener.context;
-      const currentVol = this.bossBGM.getVolume();
-      this.bossBGM.gain.gain.cancelScheduledValues(ctx.currentTime);
-      this.bossBGM.gain.gain.setValueAtTime(currentVol, ctx.currentTime);
-      this.bossBGM.gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.5); // WebAudio doesn't like ramping to exact 0 sometimes
-      setTimeout(() => {
-          this.bossBGM?.stop();
-      }, 500);
+        this.bossBGM.stop();
     }
   }
 
@@ -747,6 +833,14 @@ export class GameEngine {
     this.initialTargetAtStart.set(0, 0);
     this.mouse.set(0, 0);
     this.hasFoughtBoss = false;
+    this.hasFoughtBoss2 = false;
+    this.currentBossLevel = 1;
+    this.bossEvadeCount = 0;
+    
+    if (this.bossBGM && this.bossBGM.isPlaying) {
+        this.bossBGM.stop();
+    }
+
     if (this.bossGroup) {
       this.worldObjects.remove(this.bossGroup);
       this.bossGroup = undefined;
@@ -872,12 +966,18 @@ export class GameEngine {
 
     // Stage Transitions
     const prevStage = this.state.stage;
-    if (this.state.stage === 'Meadow' && this.state.survivedTime >= 30 && !this.hasFoughtBoss) {
-        this.startBossFight();
-    } else if (this.state.survivedTime > 90) {
-        this.state.stage = 'Space';
-    } else if (this.state.survivedTime > 60) {
-        this.state.stage = 'City';
+    if (!this.state.isBossFight) {
+        if (this.state.stage === 'Meadow' && this.state.survivedTime >= 30 && !this.hasFoughtBoss) {
+            this.currentBossLevel = 1;
+            this.startBossFight();
+        } else if (this.state.stage === 'Ocean' && this.state.survivedTime >= 55 && !this.hasFoughtBoss2) {
+            this.currentBossLevel = 2;
+            this.startBossFight();
+        } else if (this.state.survivedTime > 90) {
+            this.state.stage = 'Space';
+        } else if (this.state.survivedTime > 60 && this.hasFoughtBoss2) {
+            this.state.stage = 'City';
+        }
     }
 
     if (prevStage !== this.state.stage) {
