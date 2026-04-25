@@ -331,64 +331,8 @@ export class GameEngine {
        this.bossBGM.gain.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.5);
     }
     
-    // Create Boss Model (Faceted Phoenix - Low poly)
-    this.bossGroup = new THREE.Group();
-    const scale = 5;
-    
-    // Phoenix Body (crystalline/faceted cone)
-    const bodyGeom = new THREE.ConeGeometry(0.8 * scale, 3 * scale, 6);
-    const bodyMat = new THREE.MeshPhongMaterial({ 
-        color: 0xff3300, 
-        emissive: 0xaa2200, 
-        flatShading: true,
-        transparent: true,
-        opacity: 0.9
-    });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.rotation.x = -Math.PI / 2;
-    
-    // Phoenix Wings (faceted irregular shapes)
-    // Custom shape for a fiery wing
-    const wingShape = new THREE.Shape([
-        new THREE.Vector2(0, 0),
-        new THREE.Vector2(3, -0.5),
-        new THREE.Vector2(3.5, 1),
-        new THREE.Vector2(1.5, 0.5),
-        new THREE.Vector2(0.5, 2),
-    ]);
-    const wingGeom = new THREE.ExtrudeGeometry(wingShape, { depth: 0.2 * scale, bevelEnabled: false });
-    // Center the wing geometry
-    wingGeom.translate(0, 0, -0.1 * scale);
-
-    const wingMat = new THREE.MeshPhongMaterial({ 
-        color: 0xffaa00, 
-        emissive: 0xdd4400, 
-        flatShading: true,
-        side: THREE.DoubleSide 
-    });
-    
-    const leftWing = new THREE.Mesh(wingGeom, wingMat);
-    leftWing.scale.set(scale * 0.8, scale * 0.8, scale * 0.8);
-    leftWing.position.set(0.5 * scale, 0, 0);
-
-    const rightWing = new THREE.Mesh(wingGeom, wingMat);
-    rightWing.scale.set(scale * 0.8, scale * 0.8, scale * 0.8);
-    rightWing.rotation.x = Math.PI; // flip
-    rightWing.position.set(-0.5 * scale, 0, 0);
-    
-    const leftPivot = new THREE.Group();
-    leftPivot.position.set(0.2 * scale, 0, 0.2 * scale);
-    leftPivot.add(leftWing);
-    
-    const rightPivot = new THREE.Group();
-    rightPivot.position.set(-0.2 * scale, 0, 0.2 * scale);
-    rightPivot.add(rightWing);
-    
-    // Intense Point Light to illuminate trees red
-    const bossLight = new THREE.PointLight(0xff2200, 10, 100);
-    
-    this.bossGroup.add(body, leftPivot, rightPivot, bossLight);
-    this.bossGroup.userData = { radius: 2.0 * scale, leftWing: leftPivot, rightWing: rightPivot };
+    // Create Boss Model
+    this.bossGroup = this.createPhoenix();
     
     // Position boss in front of camera
     this.bossGroup.position.set(0, 10, -80);
@@ -400,44 +344,171 @@ export class GameEngine {
     this.bossShotCount = 1;
   }
 
+  private createPhoenix(): THREE.Group {
+    const group = new THREE.Group();
+    const scale = 5;
+
+    // Materials (Fire Gradient, flat shading, no emissive glow)
+    const crimsonMat = new THREE.MeshPhongMaterial({ color: 0xc12218, flatShading: true, side: THREE.DoubleSide });
+    const orangeMat = new THREE.MeshPhongMaterial({ color: 0xff8a00, flatShading: true, side: THREE.DoubleSide });
+    const yellowMat = new THREE.MeshPhongMaterial({ color: 0xffd700, flatShading: true, side: THREE.DoubleSide });
+
+    // 1. Body Unit (Icosahedron transformed)
+    const bodyGeom = new THREE.IcosahedronGeometry(1.2 * scale, 0);
+    bodyGeom.scale(0.8, 0.7, 2.5); // Streamlined fuselage
+    const body = new THREE.Mesh(bodyGeom, crimsonMat);
+    group.add(body);
+
+    // 2. Head & Crest Unit
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0, 0.5 * scale, -2.8 * scale);
+
+    const headGeom = new THREE.ConeGeometry(0.8 * scale, 1.6 * scale, 5);
+    headGeom.rotateX(-Math.PI / 2);
+    const head = new THREE.Mesh(headGeom, crimsonMat);
+    headGroup.add(head);
+
+    const beakGeom = new THREE.ConeGeometry(0.3 * scale, 1.5 * scale, 4);
+    beakGeom.rotateX(-Math.PI / 2);
+    beakGeom.translate(0, 0, -0.6 * scale);
+    const beak = new THREE.Mesh(beakGeom, orangeMat);
+    beak.position.set(0, -0.2 * scale, -0.7 * scale);
+    beak.rotation.x = -0.3; // Hooked down
+    headGroup.add(beak);
+
+    // Dense Crest
+    const crestObj = new THREE.Group();
+    crestObj.position.set(0, 0.5 * scale, 0.2 * scale);
+    
+    const crestCfgs = [
+        { s: 1.0, r: 0.1, z: 0.0, y: 0.0 },
+        { s: 1.3, r: -0.1, z: 0.6 * scale, y: 0.1 * scale },
+        { s: 1.1, r: -0.2, z: 1.2 * scale, y: 0.0 },
+        { s: 0.8, r: -0.5, z: 1.7 * scale, y: -0.2 * scale },
+    ];
+    crestCfgs.forEach(cfg => {
+        const crestFlake = new THREE.ConeGeometry(0.25 * scale, 2.0 * scale, 3);
+        crestFlake.rotateX(Math.PI / 3 + cfg.r);
+        const mesh = new THREE.Mesh(crestFlake, orangeMat);
+        mesh.scale.set(cfg.s, cfg.s, cfg.s * 1.5);
+        mesh.position.set(0, cfg.y, cfg.z);
+        crestObj.add(mesh);
+    });
+    headGroup.add(crestObj);
+    group.add(headGroup);
+
+    // 3. Wings (5+ overlapping panels with swept-back, jagged shapes)
+    const buildWing = (signX: number) => {
+        const wing = new THREE.Group();
+        
+        // Creating organic poly panels
+        const createWingPanel = (pts: THREE.Vector2[], color: THREE.Material, px: number, py: number, pz: number, rotY: number) => {
+            const shape = new THREE.Shape(pts);
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.15 * scale, bevelEnabled: false });
+            geom.rotateX(Math.PI / 2);
+            const mesh = new THREE.Mesh(geom, color);
+            mesh.position.set(px * signX, py, pz);
+            if (signX < 0) {
+                mesh.scale.x = -1; // Flip for right wing
+            }
+            mesh.rotation.y = rotY * signX;
+            return mesh;
+        };
+
+        // Panel pts (designed for left wing, right wing gets flipped scale.x = -1)
+        // Root Front: (0,0), Tip Front: (x,y), Tip Back: (x', y'), Root Back: (0, y'')
+        const p1 = [new THREE.Vector2(0,0), new THREE.Vector2(2*scale, 1.0*scale), new THREE.Vector2(1.8*scale, 2.0*scale), new THREE.Vector2(0, 1.5*scale)];
+        const baseMesh = createWingPanel(p1, crimsonMat, 0.8 * scale, 0, -0.5 * scale, -0.2);
+
+        const p2 = [new THREE.Vector2(0,0), new THREE.Vector2(2.5*scale, 1.5*scale), new THREE.Vector2(2.2*scale, 2.5*scale), new THREE.Vector2(0, 1.2*scale)];
+        const midMesh1 = createWingPanel(p2, orangeMat, 1.5 * scale, 0.1 * scale, -0.2 * scale, -0.1);
+
+        const p3 = [new THREE.Vector2(0,0), new THREE.Vector2(3.0*scale, 2.0*scale), new THREE.Vector2(2.6*scale, 3.0*scale), new THREE.Vector2(0, 1.5*scale)];
+        const midMesh2 = createWingPanel(p3, orangeMat, 2.5 * scale, 0.2 * scale, 0.1 * scale, 0.0);
+
+        const p4 = [new THREE.Vector2(0,0), new THREE.Vector2(2.5*scale, 2.5*scale), new THREE.Vector2(1.8*scale, 3.5*scale), new THREE.Vector2(0, 1.0*scale)];
+        const tipMesh1 = createWingPanel(p4, yellowMat, 3.8 * scale, 0.3 * scale, 0.4 * scale, 0.1);
+
+        const p5 = [new THREE.Vector2(0,0), new THREE.Vector2(2.0*scale, 3.5*scale), new THREE.Vector2(1.0*scale, 4.0*scale), new THREE.Vector2(0, 0.8*scale)];
+        const tipMesh2 = createWingPanel(p5, yellowMat, 4.8 * scale, 0.4 * scale, 0.8 * scale, 0.2);
+
+        wing.add(baseMesh, midMesh1, midMesh2, tipMesh1, tipMesh2);
+        
+        // Wing dihedral angle (tilt upwards) for standard heroic V-shape silhouette
+        wing.rotation.z = signX * 0.4;
+        return wing;
+    };
+
+    const leftWing = buildWing(1);
+    const rightWing = buildWing(-1);
+
+    const leftPivot = new THREE.Group();
+    leftPivot.position.set(0.5 * scale, 0, 0);
+    leftPivot.rotation.x = THREE.MathUtils.degToRad(20); // Tilt top of wing towards player
+    leftPivot.add(leftWing);
+
+    const rightPivot = new THREE.Group();
+    rightPivot.position.set(-0.5 * scale, 0, 0);
+    rightPivot.rotation.x = THREE.MathUtils.degToRad(20); // Tilt top of wing towards player
+    rightPivot.add(rightWing);
+    
+    group.add(leftPivot, rightPivot);
+
+    // 4. Tail Feathers (At least 5 distinct flowing down and out)
+    const tailGroup = new THREE.Group();
+    tailGroup.position.set(0, 0, 2 * scale);
+
+    const tailCfgs = [
+        { w: 0.6*scale, l: 4.5*scale, ry: 0, rx: 0.2, col: yellowMat }, // Center longest
+        { w: 0.5*scale, l: 3.8*scale, ry: 0.3, rx: 0.15, col: orangeMat }, // Inner L
+        { w: 0.5*scale, l: 3.8*scale, ry: -0.3, rx: 0.15, col: orangeMat }, // Inner R
+        { w: 0.4*scale, l: 3.0*scale, ry: 0.6, rx: 0.1, col: yellowMat }, // Outer L
+        { w: 0.4*scale, l: 3.0*scale, ry: -0.6, rx: 0.1, col: yellowMat }, // Outer R
+    ];
+
+    tailCfgs.forEach(cfg => {
+        const shape = new THREE.Shape([
+            new THREE.Vector2(-cfg.w/2, 0),
+            new THREE.Vector2(-cfg.w, 0.4*cfg.l), // Jagged outer step
+            new THREE.Vector2(-cfg.w/2, 0.6*cfg.l),
+            new THREE.Vector2(0, cfg.l), // Tip
+            new THREE.Vector2(cfg.w/2, 0.8*cfg.l),
+            new THREE.Vector2(cfg.w, 0.3*cfg.l), // Jagged inner step
+            new THREE.Vector2(cfg.w/2, 0)
+        ]);
+        const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.1 * scale, bevelEnabled: false });
+        geom.rotateX(Math.PI / 2);
+        const mesh = new THREE.Mesh(geom, cfg.col);
+        mesh.rotation.set(cfg.rx, cfg.ry, 0);
+        tailGroup.add(mesh);
+    });
+
+    group.add(tailGroup);
+
+    // Provide userData for animations
+    group.userData = { radius: 3.0 * scale, leftWing: leftPivot, rightWing: rightPivot };
+
+    // Point Light for dramatic silhouette effect without emitting natively
+    const bossLight = new THREE.PointLight(0xff2200, 10, 100);
+    bossLight.position.set(0, 2*scale, 0);
+    group.add(bossLight);
+
+    return group;
+  }
+
   private updateBossFight(delta: number) {
     if (!this.bossGroup) return;
 
-    // Wing flap animation
+    // Wing flap animation (slow at peaks, fast in middle)
     const time = this.clock.getElapsedTime();
     const lw = this.bossGroup.userData.leftWing;
     const rw = this.bossGroup.userData.rightWing;
     if (lw && rw) {
-       lw.rotation.y = Math.sin(time * 15) * 0.3;
-       rw.rotation.y = -Math.sin(time * 15) * 0.3;
-    }
-
-    // Fire trail particles
-    if (Math.random() < 0.8) {
-        const geom = new THREE.BoxGeometry(2, 2, 2);
-        // Random orange/yellow/red color
-        const colors = [0xff2200, 0xff7700, 0xffaa00];
-        const mat = new THREE.MeshBasicMaterial({ 
-            color: colors[Math.floor(Math.random() * colors.length)], 
-            transparent: true, 
-            opacity: 0.8 
-        });
-        const p = new THREE.Mesh(geom, mat);
-        p.position.copy(this.bossGroup.position);
-        
-        // Spread a bit behind and around
-        p.position.x += (Math.random() - 0.5) * 4;
-        p.position.y += (Math.random() - 0.5) * 4;
-        p.position.z += 2; 
-
-        // Particles float up and move towards player's world z (which is effectively positive z in local)
-        const velocity = new THREE.Vector3(
-            (Math.random() - 0.5) * 5,
-            (Math.random() - 0.1) * 10,
-            20 // Move towards player so it acts as an obstacle or just a visual trail that passes
-        );
-        this.worldObjects.add(p);
-        this.particles.push({ mesh: p, velocity, life: 1.5, isHarmful: true });
+       // Math.pow(Math.abs(sin), 0.7) creates a slightly squared-off sine wave for hovering
+       const sinT = Math.sin(time * 12);
+       const flapAngle = Math.sign(sinT) * Math.pow(Math.abs(sinT), 0.7) * 0.35;
+       lw.rotation.z = flapAngle;
+       rw.rotation.z = -flapAngle;
     }
 
     this.bossActionTimer += delta;
@@ -447,8 +518,13 @@ export class GameEngine {
         // Boss moves in a pattern in front of player
         this.bossGroup.position.x = Math.sin(time * 2) * 15;
         this.bossGroup.position.y = 10 + Math.sin(time * 3) * 3;
-        // Ensure boss stays firmly at z = -80 relative to the world, but since plane is at z=0, just fix it at -80.
+        // Ensure boss stays firmly at z = -80 relative to the world
         this.bossGroup.position.z = -80;
+        
+        // Banking effect: tilt body based on horizontal velocity
+        // velocityX = derivative of Math.sin(time * 2) * 15 = Math.cos(time * 2) * 30
+        const velocityX = Math.cos(time * 2) * 30;
+        this.bossGroup.rotation.z = -velocityX * 0.015;
 
         // Shoot projectiles
         if (this.bossActionTimer > 0.8) {
