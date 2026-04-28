@@ -6,7 +6,10 @@ export const gameSounds = {
   warning: new Howl({ src: ['warning_siren.mp3'], loop: true, volume: 0.5 }),
   bossEntry: new Howl({ src: ['boss_impact.mp3'], volume: 1.0 }),
   chargeUp: new Howl({ src: ['charge_up.mp3'], volume: 1.0 }),
-  rapidFire: new Howl({ src: ['rapid_fire.mp3'], volume: 0.7 })
+  rapidFire: new Howl({ src: ['rapid_fire.mp3'], volume: 0.7 }),
+  blip: new Howl({ src: ['laser_blip.mp3'], volume: 0.5 }),
+  powerUp: new Howl({ src: ['power_up.mp3'], volume: 1.0 }),
+  screech: new Howl({ src: ['screech.mp3'], volume: 1.0 })
 };
 
 export interface GameState {
@@ -878,31 +881,83 @@ export class GameEngine {
                 break;
         }
     } else if (this.currentBossLevel === 3) {
-        // Level 3 Boss Logic (Vertical Orbit & NxN Burst Firing)
+        // Level 3 Boss Logic (Vertical Orbit & NxN Burst Firing, or Chaos Bullet Hell for Hell Mode)
+        const isHellMode = this.state.loopCount > 0;
+        
         switch (this.bossState) {
             case 'aiming':
-                // Boss moves vertically up and down in a large range
-                this.bossGroup.position.x = Math.sin(time * 1.5) * 5; 
-                this.bossGroup.position.y = 15 + Math.sin(time * 2.5) * 12; // Modulated height
-                this.bossGroup.position.z = -80;
-                
-                const velX = Math.cos(time * 1.5) * 7.5;
-                this.bossGroup.rotation.z = -velX * 0.015;
-
-                const burstInterval = 0.2;
-                const mainCycleDelay = 2.0;
-
-                if (this.burstsFiredInCycle < this.stage3AttackN) {
-                    if (this.bossActionTimer > burstInterval) {
-                        this.fireBossProjectileMultiRow(this.stage3AttackN);
-                        this.burstsFiredInCycle++;
-                        this.bossActionTimer = 0;
+                if (isHellMode) {
+                    if (this.bossGroup.userData.targetX === undefined) {
+                        this.bossGroup.userData.targetX = 0;
+                        this.bossGroup.userData.targetY = 0;
+                        this.bossGroup.userData.moveTimer = 0;
+                        this.bossGroup.userData.fireTimer = 0;
+                    }
+                    
+                    this.bossGroup.userData.moveTimer += delta;
+                    if (this.bossGroup.userData.moveTimer > 1.5) {
+                        this.bossGroup.userData.moveTimer = 0;
+                        this.bossGroup.userData.targetX = (Math.random() * 30) - 15; // [-15, 15]
+                        this.bossGroup.userData.targetY = (Math.random() * 20) - 10; // [-10, 10]
+                    }
+                    
+                    this.bossGroup.position.x = THREE.MathUtils.lerp(this.bossGroup.position.x, this.bossGroup.userData.targetX, delta * 2);
+                    this.bossGroup.position.y = THREE.MathUtils.lerp(this.bossGroup.position.y, this.bossGroup.userData.targetY, delta * 2);
+                    this.bossGroup.position.z = -80;
+                    
+                    const targetRotZ = -(this.bossGroup.userData.targetX - this.bossGroup.position.x) * 0.05;
+                    this.bossGroup.rotation.z = THREE.MathUtils.lerp(this.bossGroup.rotation.z, targetRotZ, delta * 3);
+                    
+                    this.bossGroup.userData.fireTimer += delta;
+                    if (this.bossGroup.userData.fireTimer >= 0.2) {
+                        this.bossGroup.userData.fireTimer = 0;
+                        const N = Math.floor(Math.sin(time * 2) * 2) + 3; // 1 to 5 missiles
+                        this.fireBossProjectileMultiRow(N, true, undefined, undefined, true); // true = horizontal, silent = true
+                        
+                        if (gameSounds.blip) {
+                            gameSounds.blip.play();
+                        }
+                        
+                        this.bossGroup.children.forEach(child => {
+                            if ((child as THREE.Mesh).isMesh) {
+                                const mat = (child as THREE.Mesh).material as THREE.MeshPhongMaterial;
+                                if (mat && mat.emissive) mat.emissive.setHex(0xffaa00);
+                            }
+                        });
+                        this.bossGroup.userData.pulseActive = true;
+                    } else if (this.bossGroup.userData.pulseActive && this.bossGroup.userData.fireTimer > 0.05) {
+                        this.bossGroup.children.forEach(child => {
+                            if ((child as THREE.Mesh).isMesh) {
+                                const mat = (child as THREE.Mesh).material as THREE.MeshPhongMaterial;
+                                if (mat && mat.emissive) mat.emissive.setHex(0x111111);
+                            }
+                        });
+                        this.bossGroup.userData.pulseActive = false;
                     }
                 } else {
-                    if (this.bossActionTimer > mainCycleDelay) {
-                        this.stage3AttackN = Math.min(this.stage3AttackN + 1, 6);
-                        this.burstsFiredInCycle = 0;
-                        this.bossActionTimer = 0;
+                    // Normal Boss Height modulation
+                    this.bossGroup.position.x = Math.sin(time * 1.5) * 5; 
+                    this.bossGroup.position.y = 15 + Math.sin(time * 2.5) * 12; // Modulated height
+                    this.bossGroup.position.z = -80;
+                    
+                    const velX = Math.cos(time * 1.5) * 7.5;
+                    this.bossGroup.rotation.z = -velX * 0.015;
+
+                    const burstInterval = 0.2;
+                    const mainCycleDelay = 2.0;
+
+                    if (this.burstsFiredInCycle < this.stage3AttackN) {
+                        if (this.bossActionTimer > burstInterval) {
+                            this.fireBossProjectileMultiRow(this.stage3AttackN);
+                            this.burstsFiredInCycle++;
+                            this.bossActionTimer = 0;
+                        }
+                    } else {
+                        if (this.bossActionTimer > mainCycleDelay) {
+                            this.stage3AttackN = Math.min(this.stage3AttackN + 1, 6);
+                            this.burstsFiredInCycle = 0;
+                            this.bossActionTimer = 0;
+                        }
                     }
                 }
                 break;
@@ -916,7 +971,9 @@ export class GameEngine {
                 break;
         }
     } else if (this.currentBossLevel === 4) {
-        // Level 4 Boss Logic (Survival Mode)
+        // Level 4 Boss Logic (Survival Mode & Hell Combination)
+        const isHellMode = this.state.loopCount > 0;
+        
         switch (this.bossState) {
             case 'idle':
                 // Hover and wait
@@ -925,33 +982,142 @@ export class GameEngine {
                 this.bossGroup.position.z = -80;
                 this.bossGroup.rotation.z = -(Math.cos(time * 2) * 16) * 0.015;
 
-                if (this.bossActionTimer > 2.0) { // 2 second idle between attacks
+                const idleDelay = isHellMode ? 1.0 : 2.0;
+
+                if (this.bossActionTimer > idleDelay) { 
                     this.bossActionTimer = 0;
                     if (this.currentAttackPhase > 8) {
                         this.endBossFight();
                     } else {
                         // Pick next attack
-                        let attackType: 'fire' | 'dash' = 'fire';
-                        if (this.currentAttackPhase === 1 || this.currentAttackPhase === 3) {
-                            attackType = 'fire';
-                        } else if (this.currentAttackPhase === 2 || this.currentAttackPhase === 4) {
-                            attackType = 'dash';
+                        if (isHellMode) {
+                            let attackType = Math.random() < 0.5 ? 'hell_laser_aim' : 'hell_dash_ready';
+                            this.bossState = attackType;
+                            
+                            if (attackType === 'hell_laser_aim') {
+                                if (gameSounds.powerUp) gameSounds.powerUp.play();
+                            } else if (attackType === 'hell_dash_ready') {
+                                if (gameSounds.chargeUp) gameSounds.chargeUp.play();
+                            }
                         } else {
-                            attackType = Math.random() < 0.5 ? 'fire' : 'dash';
-                        }
-                        
-                        if (attackType === 'fire') {
-                            this.fireBossProjectileGrid();
-                            // Wait a bit before moving to next phase
-                            this.bossState = 'aiming'; // We reuse aiming as a wait state
-                        } else {
-                            this.bossState = 'dashing';
-                            this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                            let attackType: 'fire' | 'dash' = 'fire';
+                            if (this.currentAttackPhase === 1 || this.currentAttackPhase === 3) {
+                                attackType = 'fire';
+                            } else if (this.currentAttackPhase === 2 || this.currentAttackPhase === 4) {
+                                attackType = 'dash';
+                            } else {
+                                attackType = Math.random() < 0.5 ? 'fire' : 'dash';
+                            }
+                            
+                            if (attackType === 'fire') {
+                                this.fireBossProjectileGrid();
+                                // Wait a bit before moving to next phase
+                                this.bossState = 'aiming'; // We reuse aiming as a wait state
+                            } else {
+                                this.bossState = 'dashing';
+                                this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                            }
                         }
                     }
                 }
                 break;
-            case 'aiming': // Waiting after fire attack
+            case 'hell_laser_aim':
+                // Stop & Aim (0.3s) then Warning (0.5s)
+                this.bossGroup.rotation.z = 0;
+                this.bossGroup.position.z = -80;
+                
+                if (this.bossActionTimer < 0.3) {
+                    this.bossGroup.position.x = THREE.MathUtils.lerp(this.bossGroup.position.x, 0, delta * 8);
+                    this.bossGroup.position.y = THREE.MathUtils.lerp(this.bossGroup.position.y, this.plane.position.y, delta * 15);
+                    this.stage1LaserTargetY = this.bossGroup.position.y;
+                } else {
+                    if (!this.stage1LaserWarningMesh) {
+                        const warnGeom = new THREE.BoxGeometry(1000, 0.5, 200);
+                        const warnMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                        this.stage1LaserWarningMesh = new THREE.Mesh(warnGeom, warnMat);
+                        this.worldObjects.add(this.stage1LaserWarningMesh);
+                    }
+                    
+                    this.stage1LaserWarningMesh.position.set(0, this.stage1LaserTargetY, -40);
+                    
+                    // Opacity flash
+                    if (this.stage1LaserWarningMesh.material instanceof THREE.Material) {
+                        this.stage1LaserWarningMesh.material.opacity = 0.3 + 0.5 * Math.abs(Math.sin(time * 20));
+                    }
+                }
+                
+                if (this.bossActionTimer > 0.8) {
+                    this.bossActionTimer = 0;
+                    this.bossState = 'hell_laser_fire';
+                    
+                    if (this.stage1LaserWarningMesh) {
+                        this.worldObjects.remove(this.stage1LaserWarningMesh);
+                        this.stage1LaserWarningMesh = undefined;
+                    }
+                    
+                    const laserGeom = new THREE.BoxGeometry(100, 4.0, 200);
+                    const laserMat = new THREE.MeshBasicMaterial({ color: 0xffaaaa, transparent: true, opacity: 0.9 });
+                    this.stage1LaserMesh = new THREE.Mesh(laserGeom, laserMat);
+                    this.stage1LaserMesh.position.set(0, this.stage1LaserTargetY, -40);
+                    this.worldObjects.add(this.stage1LaserMesh);
+                    
+                    if (this.projectileSFX && this.projectileSFX.buffer) {
+                        if (this.projectileSFX.isPlaying) this.projectileSFX.stop();
+                        this.projectileSFX.play();
+                    }
+                }
+                break;
+            case 'hell_laser_fire':
+                // Check Collision
+                if (Math.abs(this.plane.position.y - this.stage1LaserTargetY) < 3.5) {
+                    this.onCrash();
+                }
+                
+                if (this.bossActionTimer > 0.5) {
+                    this.bossState = 'idle';
+                    this.bossActionTimer = 0;
+                    this.currentAttackPhase++;
+                    if (this.stage1LaserMesh) {
+                        this.worldObjects.remove(this.stage1LaserMesh);
+                        this.stage1LaserMesh = undefined;
+                    }
+                }
+                break;
+            case 'hell_dash_ready':
+                if (this.bossGroup.userData.dashStartY === undefined) {
+                    this.bossGroup.userData.dashStartY = this.bossGroup.position.y;
+                    this.bossGroup.userData.dashStartX = this.bossGroup.position.x;
+                }
+                const shakeIntensity = 0.5;
+                this.bossGroup.position.x = this.bossGroup.userData.dashStartX + (Math.random() - 0.5) * shakeIntensity;
+                this.bossGroup.position.y = this.bossGroup.userData.dashStartY + (Math.random() - 0.5) * shakeIntensity;
+                
+                this.bossGroup.children.forEach(child => {
+                    if ((child as THREE.Mesh).isMesh) {
+                        const mat = (child as THREE.Mesh).material as THREE.MeshPhongMaterial;
+                        if (mat && mat.emissive) mat.emissive.setHex(0xff0000); // Glow red
+                    }
+                });
+                
+                if (this.bossActionTimer > 0.5) { // 0.5s telegraph
+                    this.bossState = 'dashing';
+                    this.bossActionTimer = 0;
+                    this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                    this.bossGroup.userData.lastShotTime = performance.now() / 1000;
+                    this.bossGroup.userData.isHellDash = true;
+                    this.bossGroup.userData.dashStartX = undefined;
+                    this.bossGroup.userData.dashStartY = undefined;
+                    if (gameSounds.screech) gameSounds.screech.play();
+                    
+                    this.bossGroup.children.forEach(child => {
+                        if ((child as THREE.Mesh).isMesh) {
+                            const mat = (child as THREE.Mesh).material as THREE.MeshPhongMaterial;
+                            if (mat && mat.emissive) mat.emissive.setHex(0x111111);
+                        }
+                    });
+                }
+                break;
+            case 'aiming': // Normal Waiting after fire attack
                 this.bossGroup.position.x = Math.sin(time * 2) * 8; 
                 this.bossGroup.position.y = 10 + Math.sin(time * 3) * 2;
                 this.bossGroup.position.z = -80;
@@ -963,12 +1129,33 @@ export class GameEngine {
                 }
                 break;
             case 'dashing':
-                const dashSpeed = 150 * delta;
+                const isHellDash = this.bossGroup.userData.isHellDash;
+                const dashSpeed = (isHellDash ? 180 : 150) * delta; // 20% faster
                 const distToTarget = this.bossGroup.position.distanceTo(this.bossTargetPos);
                 
                 if (distToTarget > dashSpeed) {
                     const dir = this.bossTargetPos.clone().sub(this.bossGroup.position).normalize();
                     this.bossGroup.position.add(dir.multiplyScalar(dashSpeed));
+                    
+                    if (isHellDash) {
+                        const now = performance.now() / 1000;
+                        if (now - this.bossGroup.userData.lastShotTime > 0.1) {
+                            this.bossGroup.userData.lastShotTime = now;
+                            
+                            // Radial burst while moving
+                            for (let i = 0; i < 6; i++) {
+                                const angle = (i / 6) * Math.PI * 2;
+                                const vel = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0).multiplyScalar(20);
+                                
+                                const projGeom = new THREE.SphereGeometry(1.0, 8, 8);
+                                const projMat = new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0xaa0000 });
+                                const mesh = new THREE.Mesh(projGeom, projMat);
+                                mesh.position.copy(this.bossGroup.position);
+                                this.worldObjects.add(mesh);
+                                this.bossProjectiles.push({ mesh, velocity: vel });
+                            }
+                        }
+                    }
                 } else {
                     this.bossGroup.position.copy(this.bossTargetPos);
                 }
@@ -984,6 +1171,7 @@ export class GameEngine {
                 if (this.bossGroup.position.z >= 10) {
                     this.bossState = 'retreating';
                     this.bossActionTimer = 0;
+                    this.bossGroup.userData.isHellDash = false;
                 }
                 break;
             case 'retreating':
@@ -1108,10 +1296,10 @@ export class GameEngine {
     }
   }
 
-  private fireBossProjectileMultiRow(count: number, isHorizontal: boolean = false, targetY?: number, spacingOverride?: number) {
+  private fireBossProjectileMultiRow(count: number, isHorizontal: boolean = false, targetY?: number, spacingOverride?: number, silent: boolean = false) {
     if (!this.bossGroup) return;
 
-    if (this.projectileSFX && this.projectileSFX.buffer) {
+    if (!silent && this.projectileSFX && this.projectileSFX.buffer) {
         if (this.projectileSFX.isPlaying) this.projectileSFX.stop();
         this.projectileSFX.play();
     }
