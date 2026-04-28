@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GameEngine, GameState } from './game/GameEngine';
-import { Trophy, Timer, Coins, ChevronRight, Play, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Trophy, Timer, Coins, ChevronRight, Play, RefreshCw, AlertTriangle, Maximize, Minimize } from 'lucide-react';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -14,6 +14,7 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [showTimeBonus, setShowTimeBonus] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     if (containerRef.current && !engineRef.current) {
@@ -28,6 +29,26 @@ export default function App() {
       });
     }
   }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((err) => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
 
   const handleStart = (e?: React.SyntheticEvent) => {
     if (e) {
@@ -49,6 +70,17 @@ export default function App() {
 
   return (
     <div className="relative w-full h-screen overflow-hidden font-sans text-slate-100">
+      {/* Fullscreen Toggle */}
+      <div className="absolute top-4 right-4 z-50">
+        <button 
+          onClick={toggleFullscreen}
+          className="p-2 bg-black/50 hover:bg-black/80 border-2 border-white/20 text-white/70 hover:text-white rounded-full transition-all backdrop-blur-md cursor-pointer pointer-events-auto"
+          title="Toggle Fullscreen"
+        >
+          {isFullscreen ? <Minimize className="w-5 h-5 md:w-6 md:h-6" /> : <Maximize className="w-5 h-5 md:w-6 md:h-6" />}
+        </button>
+      </div>
+
       {/* Three.js Canvas Container */}
       <div ref={containerRef} className="absolute inset-0 z-0" />
 
