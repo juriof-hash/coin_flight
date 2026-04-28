@@ -31,3 +31,45 @@ canvas {
     text-shadow: 0 0 15px rgba(239, 68, 68, 0.8);
   }
 }
+
+@keyframes flicker {
+  0% { opacity: 0.2; }
+  100% { opacity: 0.8; }
+}
+.animate-flicker {
+  animation: flicker 0.1s infinite alternate;
+}
+.glitch {
+  position: relative;
+  font-family: 'VT323', monospace;
+}
+.glitch::before, .glitch::after {
+  content: "WARNING: HELL MODE";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.8;
+}
+.glitch::before {
+  color: #0ff;
+  z-index: -1;
+  left: 4px;
+  animation: glitch-anim 0.3s cubic-bezier(.25, .46, .45, .94) both infinite;
+}
+.glitch::after {
+  color: #f0f;
+  z-index: -2;
+  left: -4px;
+  animation: glitch-anim 0.3s cubic-bezier(.25, .46, .45, .94) reverse both infinite;
+}
+@keyframes glitch-anim {
+  0% { transform: translate(0) }
+  20% { transform: translate(-4px, 2px) }
+  40% { transform: translate(-2px, -2px) }
+  60% { transform: translate(4px, 2px) }
+  80% { transform: translate(2px, -2px) }
+  100% { transform: translate(0) }
+}
+

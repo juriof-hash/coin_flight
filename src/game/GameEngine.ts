@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import { EnvironmentManager } from './EnvironmentManager';
+import { Howl } from 'howler';
+
+export const gameSounds = {
+  warning: new Howl({ src: ['warning_siren.mp3'], loop: true, volume: 0.5 }),
+  bossEntry: new Howl({ src: ['boss_impact.mp3'], volume: 1.0 })
+};
 
 export interface GameState {
   score: number;
@@ -13,6 +19,9 @@ export interface GameState {
   survivedTime: number;
   isBossFight: boolean;
   bossTimeLeft: number;
+  stageProgress: number; // 0 to 1
+  loopCount: number;
+  isHellWarning?: boolean;
 }
 
 export class GameEngine {
@@ -46,9 +55,13 @@ export class GameEngine {
   private obstacles: THREE.Object3D[] = [];
   private coins: THREE.Object3D[] = [];
   
+  private lastDebugKey: string = '';
+  private debugKeyCounters: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
+
   // Boss state
   private hasFoughtBoss = false;
   private hasFoughtBoss2 = false;
+  private hasFoughtBoss3 = false;
   private currentBossLevel = 1;
   private bossEvadeCount = 0;
   private bossGroup?: THREE.Group;
@@ -56,8 +69,22 @@ export class GameEngine {
   private bossState: 'idle' | 'aiming' | 'dashing' | 'retreating' | 'exiting' = 'idle';
   private bossActionTimer: number = 0;
   private bossTargetPos: THREE.Vector3 = new THREE.Vector3();
+  private isHellWarningActive: boolean = false;
+  private hellWarningTimer: number = 0;
   
   private bossShotCount: number = 1;
+  private stage1AttackN: number = 1;
+  private stage3AttackN: number = 1;
+  private burstsFiredInCycle: number = 0;
+  private stage1CycleCount: number = 1;
+  private stage1LaserPhase: number = 0; // 0=normal, 1=aiming, 2=warning, 3=firing, 4=cooldown
+  private stage1LaserTimer: number = 0;
+  private stage1LaserTargetY: number = 0;
+  private stage1LaserWarningMesh?: THREE.Mesh;
+  private stage1LaserMesh?: THREE.Mesh;
+  
+  private currentAttackPhase: number = 1;
+  private hasFoughtBoss4 = false;
   private bossProjectiles: { mesh: THREE.Mesh; velocity: THREE.Vector3 }[] = [];
   
   private envManager!: EnvironmentManager;
@@ -146,6 +173,7 @@ export class GameEngine {
     this.initWorld();
     
     window.addEventListener('resize', this.onResize.bind(this));
+    window.addEventListener('keydown', this.onKeyDown.bind(this));
     
     // Attach input listeners to the canvas element to avoid blocking UI interactions
     canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
@@ -180,6 +208,8 @@ export class GameEngine {
       survivedTime: 0,
       isBossFight: false,
       bossTimeLeft: 0,
+      stageProgress: 0,
+      loopCount: 0,
     };
   }
 
@@ -318,16 +348,59 @@ export class GameEngine {
     return group;
   }
 
+  private triggerHellWarning() {
+    this.isHellWarningActive = true;
+    this.hellWarningTimer = 0;
+    this.state.isHellWarning = true;
+    this.state.isBossFight = true; // Set to true immediately to stop normal timer and spawning
+    this.onStateUpdate({ ...this.state });
+    
+    if (Howler.ctx && Howler.ctx.state === 'suspended') {
+      Howler.ctx.resume();
+    }
+    gameSounds.warning.play();
+  }
+
   private startBossFight() {
+    if (this.isHellWarningActive) return;
+    if (this.state.loopCount > 0) {
+        this.triggerHellWarning();
+        return;
+    }
+    this.executeBossSpawn();
+  }
+
+  private executeBossSpawn() {
     if (this.currentBossLevel === 1) {
         this.hasFoughtBoss = true;
-        this.state.bossTimeLeft = 10;
+        this.state.bossTimeLeft = this.state.loopCount > 0 ? 42 : 10;
         this.bossState = 'aiming';
         this.bossShotCount = 1;
-    } else {
+        this.stage1AttackN = 1;
+        this.burstsFiredInCycle = 0;
+        this.stage1CycleCount = 1;
+        this.stage1LaserPhase = 0;
+        this.stage1LaserTimer = 0;
+    } else if (this.currentBossLevel === 2) {
         this.hasFoughtBoss2 = true;
         this.state.bossTimeLeft = 999; // Using evade counting instead
         this.bossEvadeCount = 0;
+        this.bossState = 'idle';
+        this.bossActionTimer = 0;
+    } else if (this.currentBossLevel === 3) {
+        this.hasFoughtBoss3 = true;
+        this.state.bossTimeLeft = 999; // Survival mode not time based for stage 3 or 4 now? Wait, stage 3 wasn't specified to change its win condition, it was survive 20s. Let's keep it 20s.
+        // Wait, the prompt for stage 3 says "Cycle 1... Cycle 2... up to N=5 or 6". Let's change time conditionally or just use survival time. I will keep time left at 25s to give it time to cycle.
+        this.state.bossTimeLeft = 25; 
+        this.bossState = 'aiming'; // Use aiming state for sequential firing
+        this.bossActionTimer = 0;
+        this.bossShotCount = 1;
+        this.stage3AttackN = 1;
+        this.burstsFiredInCycle = 0;
+    } else if (this.currentBossLevel === 4) {
+        this.hasFoughtBoss4 = true;
+        this.state.bossTimeLeft = 999; // Survive all 8 attacks
+        this.currentAttackPhase = 1;
         this.bossState = 'idle';
         this.bossActionTimer = 0;
     }
@@ -514,7 +587,11 @@ export class GameEngine {
     const rw = this.bossGroup.userData.rightWing;
     if (lw && rw) {
        // Math.pow(Math.abs(sin), 0.7) creates a slightly squared-off sine wave for hovering
-       const sinT = Math.sin(time * 12);
+       let flapSpeed = 12;
+       if (this.currentBossLevel === 4 && this.bossState === 'retreating') {
+           flapSpeed = 24; // Faster flap during retreat
+       }
+       const sinT = Math.sin(time * flapSpeed);
        const flapAngle = Math.sign(sinT) * Math.pow(Math.abs(sinT), 0.7) * 0.35;
        lw.rotation.z = flapAngle;
        rw.rotation.z = -flapAngle;
@@ -525,22 +602,120 @@ export class GameEngine {
     if (this.currentBossLevel === 1) {
         switch (this.bossState) {
           case 'aiming':
-            // Boss moves in a pattern in front of player
-            this.bossGroup.position.x = Math.sin(time * 2) * 15;
-            this.bossGroup.position.y = 10 + Math.sin(time * 3) * 3;
-            // Ensure boss stays firmly at z = -80 relative to the world
-            this.bossGroup.position.z = -80;
-            
-            // Banking effect: tilt body based on horizontal velocity
-            // velocityX = derivative of Math.sin(time * 2) * 15 = Math.cos(time * 2) * 30
-            const velocityX = Math.cos(time * 2) * 30;
-            this.bossGroup.rotation.z = -velocityX * 0.015;
+            if (this.state.loopCount > 0 && this.stage1CycleCount % 3 === 0) {
+                // Laser Sequence
+                this.stage1LaserTimer += delta;
+                
+                if (this.stage1LaserPhase === 0) {
+                    this.stage1LaserPhase = 1;
+                    this.stage1LaserTimer = 0;
+                } else if (this.stage1LaserPhase === 1) {
+                    // Stop & Aim (0.5s)
+                    this.bossGroup.position.x = THREE.MathUtils.lerp(this.bossGroup.position.x, 0, delta * 5);
+                    this.bossGroup.position.y = THREE.MathUtils.lerp(this.bossGroup.position.y, this.plane.position.y, delta * 5);
+                    this.bossGroup.position.z = -80;
+                    this.bossGroup.rotation.z = 0;
+                    this.stage1LaserTargetY = this.bossGroup.position.y;
+                    
+                    if (this.stage1LaserTimer > 0.5) {
+                        this.stage1LaserPhase = 2;
+                        this.stage1LaserTimer = 0;
+                        // Create warning mesh
+                        const warnGeom = new THREE.BoxGeometry(1000, 0.5, 200);
+                        const warnMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                        this.stage1LaserWarningMesh = new THREE.Mesh(warnGeom, warnMat);
+                        this.stage1LaserWarningMesh.position.set(0, this.stage1LaserTargetY, -40);
+                        this.worldObjects.add(this.stage1LaserWarningMesh);
+                    }
+                } else if (this.stage1LaserPhase === 2) {
+                    // Warning (1.0s)
+                    if (this.stage1LaserTimer > 1.0) {
+                        this.stage1LaserPhase = 3;
+                        this.stage1LaserTimer = 0;
+                        // Turn warning into laser
+                        if (this.stage1LaserWarningMesh) {
+                            this.worldObjects.remove(this.stage1LaserWarningMesh);
+                            this.stage1LaserWarningMesh = undefined;
+                        }
+                        const laserGeom = new THREE.BoxGeometry(1000, 6, 200);
+                        const laserMat = new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 2.0 });
+                        this.stage1LaserMesh = new THREE.Mesh(laserGeom, laserMat);
+                        this.stage1LaserMesh.position.set(0, this.stage1LaserTargetY, -40);
+                        this.worldObjects.add(this.stage1LaserMesh);
+                        
+                        if (this.projectileSFX && this.projectileSFX.buffer) {
+                            if (this.projectileSFX.isPlaying) this.projectileSFX.stop();
+                            this.projectileSFX.play();
+                        }
+                    }
+                } else if (this.stage1LaserPhase === 3) {
+                    // Firing (0.5s)
+                    // Collision check
+                    if (Math.abs(this.plane.position.y - this.stage1LaserTargetY) < 3.0) {
+                        this.onCrash();
+                    }
+                    if (this.stage1LaserTimer > 0.5) {
+                        this.stage1LaserPhase = 4;
+                        this.stage1LaserTimer = 0;
+                        if (this.stage1LaserMesh) {
+                            this.worldObjects.remove(this.stage1LaserMesh);
+                            this.stage1LaserMesh = undefined;
+                        }
+                    }
+                } else if (this.stage1LaserPhase === 4) {
+                    // Cooldown (0.5s)
+                    if (this.stage1LaserTimer > 0.5) {
+                        this.stage1LaserPhase = 0;
+                        this.stage1CycleCount++;
+                        // Reset normal cycle
+                        this.bossActionTimer = 0;
+                        this.burstsFiredInCycle = 0;
+                        this.stage1AttackN = Math.min(this.stage1AttackN + 1, 8);
+                    }
+                }
+            } else {
+                // Boss moves in a pattern in front of player
+                this.bossGroup.position.x = Math.sin(time * 2) * 15;
+                if (this.state.loopCount > 0) {
+                    this.bossGroup.position.y = 10 + Math.sin(time * 3) * 12; // Increased travel range for Hell mode
+                } else {
+                    this.bossGroup.position.y = 10 + Math.sin(time * 3) * 3;
+                }
+                // Ensure boss stays firmly at z = -80 relative to the world
+                this.bossGroup.position.z = -80;
+                
+                // Banking effect: tilt body based on horizontal velocity
+                // velocityX = derivative of Math.sin(time * 2) * 15 = Math.cos(time * 2) * 30
+                const velocityX = Math.cos(time * 2) * 30;
+                this.bossGroup.rotation.z = -velocityX * 0.015;
+        
+                // Shoot projectiles
+                if (this.state.loopCount > 0) {
+                    const burstInterval = 0.2;
+                    const mainCycleDelay = 2.0;
     
-            // Shoot projectiles
-            if (this.bossActionTimer > 0.8) {
-              this.bossActionTimer = 0;
-              this.fireBossProjectile();
-              this.bossShotCount++;
+                    if (this.burstsFiredInCycle < this.stage1AttackN) {
+                        if (this.bossActionTimer > burstInterval) {
+                            const targetY = (this.burstsFiredInCycle % 2 === 0) ? this.bossGroup.position.y : this.plane.position.y;
+                            this.fireBossProjectileMultiRow(this.stage1AttackN, true, targetY, 6.0);
+                            this.burstsFiredInCycle++;
+                            this.bossActionTimer = 0;
+                        }
+                    } else {
+                        if (this.bossActionTimer > mainCycleDelay) {
+                            this.stage1AttackN = Math.min(this.stage1AttackN + 1, 8);
+                            this.burstsFiredInCycle = 0;
+                            this.bossActionTimer = 0;
+                            this.stage1CycleCount++;
+                        }
+                    }
+                } else {
+                    if (this.bossActionTimer > 0.8) {
+                        this.bossActionTimer = 0;
+                        this.fireBossProjectile();
+                        this.bossShotCount++;
+                    }
+                }
             }
             break;
     
@@ -553,7 +728,7 @@ export class GameEngine {
             }
             break;
         }
-    } else {
+    } else if (this.currentBossLevel === 2) {
         // Level 2 Boss Logic (Direct Dash Attack)
         switch (this.bossState) {
             case 'idle':
@@ -589,7 +764,7 @@ export class GameEngine {
                     const dx = this.bossGroup.position.x - this.plane.position.x;
                     const dy = this.bossGroup.position.y - this.plane.position.y;
                     if (Math.hypot(dx, dy) < 4.5) { // Boss hit radius
-                        this.gameOver();
+                        this.onCrash();
                     }
                 }
 
@@ -622,6 +797,139 @@ export class GameEngine {
                 break;
             case 'exiting':
                 this.bossGroup.position.y += delta * 20;
+                this.bossGroup.position.z -= delta * 50;
+                if (this.bossGroup.position.y > 100) {
+                    this.worldObjects.remove(this.bossGroup);
+                    this.bossGroup = undefined;
+                }
+                break;
+        }
+    } else if (this.currentBossLevel === 3) {
+        // Level 3 Boss Logic (Vertical Orbit & NxN Burst Firing)
+        switch (this.bossState) {
+            case 'aiming':
+                // Boss moves vertically up and down in a large range
+                this.bossGroup.position.x = Math.sin(time * 1.5) * 5; 
+                this.bossGroup.position.y = 15 + Math.sin(time * 2.5) * 12; // Modulated height
+                this.bossGroup.position.z = -80;
+                
+                const velX = Math.cos(time * 1.5) * 7.5;
+                this.bossGroup.rotation.z = -velX * 0.015;
+
+                const burstInterval = 0.2;
+                const mainCycleDelay = 2.0;
+
+                if (this.burstsFiredInCycle < this.stage3AttackN) {
+                    if (this.bossActionTimer > burstInterval) {
+                        this.fireBossProjectileMultiRow(this.stage3AttackN);
+                        this.burstsFiredInCycle++;
+                        this.bossActionTimer = 0;
+                    }
+                } else {
+                    if (this.bossActionTimer > mainCycleDelay) {
+                        this.stage3AttackN = Math.min(this.stage3AttackN + 1, 6);
+                        this.burstsFiredInCycle = 0;
+                        this.bossActionTimer = 0;
+                    }
+                }
+                break;
+            case 'exiting':
+                this.bossGroup.position.y += delta * 20; // Fly up
+                this.bossGroup.position.z -= delta * 50;
+                if (this.bossGroup.position.y > 100) {
+                    this.worldObjects.remove(this.bossGroup);
+                    this.bossGroup = undefined;
+                }
+                break;
+        }
+    } else if (this.currentBossLevel === 4) {
+        // Level 4 Boss Logic (Survival Mode)
+        switch (this.bossState) {
+            case 'idle':
+                // Hover and wait
+                this.bossGroup.position.x = Math.sin(time * 2) * 8; 
+                this.bossGroup.position.y = 10 + Math.sin(time * 3) * 2;
+                this.bossGroup.position.z = -80;
+                this.bossGroup.rotation.z = -(Math.cos(time * 2) * 16) * 0.015;
+
+                if (this.bossActionTimer > 2.0) { // 2 second idle between attacks
+                    this.bossActionTimer = 0;
+                    if (this.currentAttackPhase > 8) {
+                        this.endBossFight();
+                    } else {
+                        // Pick next attack
+                        let attackType: 'fire' | 'dash' = 'fire';
+                        if (this.currentAttackPhase === 1 || this.currentAttackPhase === 3) {
+                            attackType = 'fire';
+                        } else if (this.currentAttackPhase === 2 || this.currentAttackPhase === 4) {
+                            attackType = 'dash';
+                        } else {
+                            attackType = Math.random() < 0.5 ? 'fire' : 'dash';
+                        }
+                        
+                        if (attackType === 'fire') {
+                            this.fireBossProjectileGrid();
+                            // Wait a bit before moving to next phase
+                            this.bossState = 'aiming'; // We reuse aiming as a wait state
+                        } else {
+                            this.bossState = 'dashing';
+                            this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                        }
+                    }
+                }
+                break;
+            case 'aiming': // Waiting after fire attack
+                this.bossGroup.position.x = Math.sin(time * 2) * 8; 
+                this.bossGroup.position.y = 10 + Math.sin(time * 3) * 2;
+                this.bossGroup.position.z = -80;
+                
+                if (this.bossActionTimer > 1.5) {
+                    this.currentAttackPhase++;
+                    this.bossState = 'idle'; // go back to idle, which adds 2 secs delay
+                    this.bossActionTimer = 0;
+                }
+                break;
+            case 'dashing':
+                const dashSpeed = 150 * delta;
+                const distToTarget = this.bossGroup.position.distanceTo(this.bossTargetPos);
+                
+                if (distToTarget > dashSpeed) {
+                    const dir = this.bossTargetPos.clone().sub(this.bossGroup.position).normalize();
+                    this.bossGroup.position.add(dir.multiplyScalar(dashSpeed));
+                } else {
+                    this.bossGroup.position.copy(this.bossTargetPos);
+                }
+
+                if (this.bossGroup.position.z > -15 && this.bossGroup.position.z < 15) {
+                    const dx = this.bossGroup.position.x - this.plane.position.x;
+                    const dy = this.bossGroup.position.y - this.plane.position.y;
+                    if (Math.hypot(dx, dy) < 4.5) { 
+                        this.onCrash();
+                    }
+                }
+
+                if (this.bossGroup.position.z >= 10) {
+                    this.bossState = 'retreating';
+                    this.bossActionTimer = 0;
+                }
+                break;
+            case 'retreating':
+                const retTargetPos = new THREE.Vector3(Math.sin(time * 2) * 8, 10 + Math.sin(time * 3) * 2, -80);
+                this.bossGroup.position.lerp(retTargetPos, 2.5 * delta);
+                
+                // Tilt rotation for banking upwards/backwards
+                this.bossGroup.rotation.x = THREE.MathUtils.lerp(this.bossGroup.rotation.x, -0.4, 5 * delta);
+
+                // Use slightly larger distance for completion since destination is moving
+                if (this.bossGroup.position.distanceTo(retTargetPos) < 2.0) {
+                    this.bossGroup.rotation.x = 0;
+                    this.bossState = 'idle';
+                    this.bossActionTimer = 0;
+                    this.currentAttackPhase++;
+                }
+                break;
+            case 'exiting':
+                this.bossGroup.position.y += delta * 20; 
                 this.bossGroup.position.z -= delta * 50;
                 if (this.bossGroup.position.y > 100) {
                     this.worldObjects.remove(this.bossGroup);
@@ -695,19 +1003,122 @@ export class GameEngine {
     }
   }
 
+  private fireBossProjectileGrid() {
+    if (!this.bossGroup) return;
+
+    if (this.projectileSFX && this.projectileSFX.buffer) {
+        if (this.projectileSFX.isPlaying) this.projectileSFX.stop();
+        this.projectileSFX.play();
+    }
+
+    const projSpeed = 40;
+    const spacing = 4.0; // Spacing between missiles
+    // Target is somewhat irrelevant because they fly straight, but let's have them fly toward the camera Z direction
+    // Wait, the player is at Z=0, boss is at Z=-80.
+    // They should fly along Z axis or towards player. Let's aim them directly backwards (positive Z)
+    const direction = new THREE.Vector3(0, 0, 1).normalize();
+    const velocity = direction.multiplyScalar(projSpeed);
+
+    for (let i = -1; i <= 1; i++) {
+        for (let j = -1; j <= 1; j++) {
+            const projGeom = new THREE.SphereGeometry(1.5, 16, 16);
+            const projMat = new THREE.MeshPhongMaterial({ color: 0xff00ff, emissive: 0xaa00aa });
+            const mesh = new THREE.Mesh(projGeom, projMat);
+            
+            mesh.position.copy(this.bossGroup.position);
+            mesh.position.x += i * spacing;
+            mesh.position.y += j * spacing;
+            
+            this.worldObjects.add(mesh);
+            this.bossProjectiles.push({ mesh, velocity });
+        }
+    }
+  }
+
+  private fireBossProjectileMultiRow(count: number, isHorizontal: boolean = false, targetY?: number, spacingOverride?: number) {
+    if (!this.bossGroup) return;
+
+    if (this.projectileSFX && this.projectileSFX.buffer) {
+        if (this.projectileSFX.isPlaying) this.projectileSFX.stop();
+        this.projectileSFX.play();
+    }
+
+    const target = this.plane.position.clone();
+    const projSpeed = 40;
+    const spacing = spacingOverride !== undefined ? spacingOverride : 4.0; // Spacing between missiles
+
+    for (let i = 0; i < count; i++) {
+        const projGeom = new THREE.SphereGeometry(1.5, 16, 16);
+        const projMat = new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0xaa0000 });
+        const mesh = new THREE.Mesh(projGeom, projMat);
+        
+        // Calculate offset
+        const offset = (i - (count - 1) / 2) * spacing;
+        
+        // Spawn at boss position with offset
+        mesh.position.copy(this.bossGroup.position);
+        
+        if (targetY !== undefined) {
+            mesh.position.y = targetY;
+        }
+
+        if (isHorizontal) {
+            mesh.position.x += offset;
+        } else {
+            mesh.position.y += offset;
+        }
+        
+        this.worldObjects.add(mesh);
+
+        // Aim each missile directly at the player's 2D plane position (x, y) but from its respective spawn Y
+        // To fly parallel, use the same base direction for all. To converge, aim them all at target.
+        // Let's have them fly parallel so they stay in rows.
+        const baseDirection = new THREE.Vector3().subVectors(target, this.bossGroup.position).normalize();
+        const velocity = baseDirection.multiplyScalar(projSpeed);
+
+        this.bossProjectiles.push({ mesh, velocity });
+    }
+  }
+
   private endBossFight() {
     this.state.isBossFight = false;
     this.bossState = 'exiting';
+    if (this.stage1LaserWarningMesh) {
+        this.worldObjects.remove(this.stage1LaserWarningMesh);
+        this.stage1LaserWarningMesh = undefined;
+    }
+    if (this.stage1LaserMesh) {
+        this.worldObjects.remove(this.stage1LaserMesh);
+        this.stage1LaserMesh = undefined;
+    }
     if (this.currentBossLevel === 1) {
         this.state.stage = 'Ocean';
-    } else {
+        this.state.timeLeft += 5; // Bonus
+    } else if (this.currentBossLevel === 2) {
         this.state.stage = 'City';
-        // Bonus for defeating Stage 2 boss
-        this.state.timeLeft += 5; 
+        this.state.timeLeft += 10; 
+    } else if (this.currentBossLevel === 3) {
+        this.state.stage = 'Space';
+        this.state.timeLeft += 15; 
+    } else if (this.currentBossLevel === 4) {
+        this.state.stage = 'Meadow';
+        this.state.timeLeft += 20; 
+        this.state.loopCount++;
+        // Reset survival time to cleanly trigger bosses again
+        this.state.survivedTime = 0;
+        this.hasFoughtBoss = false;
+        this.hasFoughtBoss2 = false;
+        this.hasFoughtBoss3 = false;
+        this.hasFoughtBoss4 = false;
+        
+        // Remove all stage 4 projectiles from scene
+        for (const proj of this.bossProjectiles) {
+            this.worldObjects.remove(proj.mesh);
+        }
+        this.bossProjectiles = [];
     }
     this.envManager.setStage(this.state.stage);
     
-    this.state.timeLeft += 5; // Bonus
     this.onStateUpdate(this.state);
 
     if (this.bossBGM && this.bossBGM.isPlaying) {
@@ -759,6 +1170,106 @@ export class GameEngine {
     }
 
     return group;
+  }
+
+  private onKeyDown(e: KeyboardEvent) {
+    if (['1', '2', '3', '4', '5'].includes(e.key)) {
+        if (this.lastDebugKey && this.lastDebugKey !== e.key) {
+            this.debugKeyCounters[this.lastDebugKey] = 0;
+        }
+        this.lastDebugKey = e.key;
+        this.debugKeyCounters[e.key] = (this.debugKeyCounters[e.key] || 0) + 1;
+
+        if (this.debugKeyCounters[e.key] >= 5) {
+            this.debugKeyCounters[e.key] = 0;
+            if (e.key === '5') {
+                let nextLevel = this.currentBossLevel;
+                if (this.state.isBossFight) {
+                    nextLevel = this.currentBossLevel + 1;
+                    if (nextLevel > 4) {
+                        nextLevel = 1;
+                        this.state.loopCount++;
+                    }
+                }
+                this.warpToBoss(nextLevel);
+            } else {
+                this.warpToBoss(parseInt(e.key));
+            }
+        }
+    } else {
+        this.debugKeyCounters = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
+        this.lastDebugKey = '';
+    }
+  }
+
+  private warpToBoss(level: number) {
+    console.log(`Debug: Warping to Boss ${level}`);
+    if (this.state.isGameOver) {
+        return;
+    }
+    if (!this.gameActive) {
+        this.start();
+    }
+
+    // Clear Screen (items and enemies)
+    for (const coin of this.coins) {
+        this.worldObjects.remove(coin);
+    }
+    this.coins = [];
+
+    for (const obs of this.obstacles) {
+        this.worldObjects.remove(obs);
+    }
+    this.obstacles = [];
+
+    if (this.bossGroup) {
+        this.worldObjects.remove(this.bossGroup);
+        this.bossGroup = undefined;
+    }
+    if (this.bossProjectiles) {
+        for (const p of this.bossProjectiles) {
+            this.worldObjects.remove(p.mesh);
+        }
+        this.bossProjectiles = [];
+    }
+
+    // Update Stage State & Progress Bar Sync
+    this.state.isBossFight = false;
+    this.hasFoughtBoss = false;
+    this.hasFoughtBoss2 = false;
+    this.hasFoughtBoss3 = false;
+    this.hasFoughtBoss4 = false;
+    this.state.stageProgress = 1;
+
+    if (level === 1) {
+        this.state.stage = 'Meadow';
+        this.state.survivedTime = 30;
+    } else if (level === 2) {
+        this.state.stage = 'Ocean';
+        this.hasFoughtBoss = true;
+        this.state.survivedTime = 55;
+    } else if (level === 3) {
+        this.state.stage = 'City';
+        this.hasFoughtBoss = true;
+        this.hasFoughtBoss2 = true;
+        this.state.survivedTime = 85;
+    } else if (level === 4) {
+        this.state.stage = 'Space';
+        this.hasFoughtBoss = true;
+        this.hasFoughtBoss2 = true;
+        this.hasFoughtBoss3 = true;
+        this.state.survivedTime = 110;
+    }
+    
+    this.envManager.setStage(this.state.stage);
+
+    // Spawn Function
+    this.currentBossLevel = level;
+    this.startBossFight();
+
+    // Reset Player
+    this.state.timeLeft = Math.max(this.state.timeLeft, 30);
+    this.onStateUpdate(this.state);
   }
 
   private onMouseMove(e: MouseEvent) {
@@ -818,6 +1329,9 @@ export class GameEngine {
     if (this.audioListener.context.state === 'suspended') {
       this.audioListener.context.resume().catch(console.error);
     }
+    if (Howler.ctx && Howler.ctx.state === 'suspended') {
+      Howler.ctx.resume();
+    }
   }
 
   public start() {
@@ -834,8 +1348,25 @@ export class GameEngine {
     this.mouse.set(0, 0);
     this.hasFoughtBoss = false;
     this.hasFoughtBoss2 = false;
+    this.hasFoughtBoss3 = false;
+    this.hasFoughtBoss4 = false;
     this.currentBossLevel = 1;
     this.bossEvadeCount = 0;
+    this.bossShotCount = 1;
+    this.stage3AttackN = 1;
+    this.burstsFiredInCycle = 0;
+    this.stage1CycleCount = 1;
+    this.stage1LaserPhase = 0;
+    this.stage1LaserTimer = 0;
+    if (this.stage1LaserWarningMesh) {
+        this.worldObjects.remove(this.stage1LaserWarningMesh);
+        this.stage1LaserWarningMesh = undefined;
+    }
+    if (this.stage1LaserMesh) {
+        this.worldObjects.remove(this.stage1LaserMesh);
+        this.stage1LaserMesh = undefined;
+    }
+    this.currentAttackPhase = 1;
     
     if (this.bossBGM && this.bossBGM.isPlaying) {
         this.bossBGM.stop();
@@ -938,11 +1469,30 @@ export class GameEngine {
   private updateLogic(delta: number) {
     if (this.state.isGameOver || !this.gameActive) return;
 
-    if (!this.state.isBossFight) {
+    if (this.isHellWarningActive) {
+        this.hellWarningTimer += delta;
+        this.cameraShakeIntensity = 2.0;
+
+        if (this.hellWarningTimer >= 2.0) {
+            this.isHellWarningActive = false;
+            this.state.isHellWarning = false;
+            this.onStateUpdate({ ...this.state });
+            this.cameraShakeIntensity = 0;
+            
+            gameSounds.warning.fade(0.5, 0, 500);
+            setTimeout(() => { gameSounds.warning.stop(); }, 500);
+            gameSounds.bossEntry.play();
+            
+            this.executeBossSpawn();
+        }
+        // Environment keeps moving, but we skip boss timers, etc.
+    }
+
+    if (!this.state.isBossFight && !this.isHellWarningActive) {
       // Normal Timer
       this.state.timeLeft -= delta;
       this.state.survivedTime += delta;
-    } else {
+    } else if (this.state.isBossFight && !this.isHellWarningActive) {
       // Boss Timer
       this.state.bossTimeLeft -= delta;
       if (this.state.bossTimeLeft <= 0 && this.bossState !== 'exiting') {
@@ -967,17 +1517,35 @@ export class GameEngine {
     // Stage Transitions
     const prevStage = this.state.stage;
     if (!this.state.isBossFight) {
-        if (this.state.stage === 'Meadow' && this.state.survivedTime >= 30 && !this.hasFoughtBoss) {
-            this.currentBossLevel = 1;
-            this.startBossFight();
-        } else if (this.state.stage === 'Ocean' && this.state.survivedTime >= 55 && !this.hasFoughtBoss2) {
-            this.currentBossLevel = 2;
-            this.startBossFight();
-        } else if (this.state.survivedTime > 90) {
-            this.state.stage = 'Space';
-        } else if (this.state.survivedTime > 60 && this.hasFoughtBoss2) {
-            this.state.stage = 'City';
+        if (this.state.stage === 'Meadow') {
+            this.state.stageProgress = Math.min(1, this.state.survivedTime / 30);
+            if (this.state.survivedTime >= 30 && !this.hasFoughtBoss) {
+                this.currentBossLevel = 1;
+                this.startBossFight();
+            }
+        } else if (this.state.stage === 'Ocean') {
+            this.state.stageProgress = Math.min(1, Math.max(0, this.state.survivedTime - 30) / 25);
+            if (this.state.survivedTime >= 55 && !this.hasFoughtBoss2) {
+                this.currentBossLevel = 2;
+                this.startBossFight();
+            }
+        } else if (this.state.stage === 'City') {
+            this.state.stageProgress = Math.min(1, Math.max(0, this.state.survivedTime - 55) / 30);
+            if (this.state.survivedTime >= 85 && !this.hasFoughtBoss3) {
+                this.currentBossLevel = 3;
+                this.startBossFight();
+            }
+        } else if (this.state.stage === 'Space') {
+            this.state.stageProgress = Math.min(1, Math.max(0, this.state.survivedTime - 85) / 25);
+            if (this.state.survivedTime >= 110 && !this.hasFoughtBoss4) {
+                this.currentBossLevel = 4;
+                this.startBossFight();
+            }
+        } else {
+            this.state.stageProgress = 1;
         }
+    } else {
+        this.state.stageProgress = 1;
     }
 
     if (prevStage !== this.state.stage) {

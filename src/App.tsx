@@ -62,8 +62,8 @@ export default function App() {
             className="absolute inset-x-0 inset-y-0 z-10 p-4 md:p-8 flex flex-col justify-between pointer-events-none"
           >
             {/* Top Row: Stats */}
-            <div className="flex flex-col sm:flex-row justify-between items-center sm:items-start gap-4">
-              <div className="flex gap-2 md:gap-4 w-full sm:w-auto">
+            <div className="flex flex-col sm:flex-row justify-between items-center sm:items-start gap-4 relative">
+              <div className="flex gap-2 md:gap-4 w-full sm:w-auto z-10">
                 <div className="flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-4 border-slate-700 p-3 md:p-4 shadow-[4px_4px_0_0_rgba(51,65,85,1)]">
                   <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-300 font-bold mb-0.5 md:mb-1 text-center sm:text-left">SCORE</div>
                   <div className="text-2xl md:text-5xl font-mono font-black text-white leading-none text-center sm:text-left">
@@ -91,19 +91,54 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 w-full sm:w-auto justify-center">
+              {/* Boss Progress Bar (Center) */}
+              <AnimatePresence>
+                {!gameState.isBossFight && gameState.stage !== 'Space' && (
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 1.1, filter: "brightness(2)" }}
+                    className="w-full sm:w-[280px] md:w-[400px] sm:absolute sm:left-1/2 sm:-translate-x-1/2 mt-2 sm:mt-0 flex flex-col items-center justify-center z-0 pointer-events-none"
+                  >
+                    <div className="text-[10px] md:text-xs uppercase tracking-[0.2em] text-red-500 font-bold mb-1 drop-shadow">
+                      ANOMALY APPROACHING
+                    </div>
+                    <div className="relative h-2 md:h-3 bg-black/80 border border-slate-700 w-full rounded-sm">
+                      <div 
+                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-orange-500 to-red-600 transition-all duration-100 ease-linear shadow-[0_0_10px_rgba(239,68,68,0.5)]"
+                        style={{ width: `${Math.max(0, Math.min(100, gameState.stageProgress * 100))}%` }}
+                      />
+                      <div 
+                        className="absolute top-1/2 transition-all duration-100 ease-linear flex items-center justify-center drop-shadow-[0_0_6px_rgba(239,68,68,0.8)]"
+                        style={{ left: `${Math.max(0, Math.min(100, gameState.stageProgress * 100))}%`, transform: 'translate(-50%, -50%)' }}
+                      >
+                         <svg viewBox="0 0 24 24" className="w-6 h-6 md:w-8 md:h-8 rotate-90 scale-x-75 fill-red-600 stroke-yellow-400 stroke-2" style={{strokeLinejoin: "round"}}>
+                           <polygon points="12,2 22,22 2,22" />
+                         </svg>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 w-full sm:w-auto justify-center z-10">
                 <div className="bg-black/80 border-4 border-slate-700 p-2 md:p-4 shadow-[4px_4px_0_0_rgba(51,65,85,1)] flex-1 sm:flex-none">
                   <div className="flex items-center gap-2 md:gap-4">
                     <div className="text-right hidden sm:block">
-                      <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-400 font-bold">STAGE</div>
+                      <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-400 font-bold">
+                        STAGE {gameState.loopCount > 0 ? `| LOOP: ${gameState.loopCount + 1}` : ''}
+                      </div>
                       <div className={`text-base md:text-2xl font-bold uppercase ${getStageColor(gameState.stage)}`}>
                         {gameState.stage}
                       </div>
                     </div>
-                    <div className={`w-8 h-8 md:w-12 md:h-12 border-4 border-white/10 border-t-current flex items-center justify-center text-[10px] md:text-xs font-black ${getStageColor(gameState.stage)}`}>
+                    <div className={`w-8 h-8 md:w-12 md:h-12 border-4 border-white/10 border-t-current flex flex-col items-center justify-center text-[10px] md:text-xs font-black ${getStageColor(gameState.stage)}`}>
                       {gameState.stage === 'Meadow' ? '1/4' : gameState.stage === 'Ocean' ? '2/4' : gameState.stage === 'City' ? '3/4' : '4/4'}
                     </div>
                     <div className="sm:hidden text-left min-w-[70px]">
+                       <div className="text-[8px] font-bold uppercase text-slate-400">
+                         {gameState.loopCount > 0 ? `L${gameState.loopCount + 1}` : ''}
+                       </div>
                        <div className={`text-[10px] font-bold uppercase ${getStageColor(gameState.stage)}`}>
                         {gameState.stage}
                       </div>
@@ -210,6 +245,15 @@ export default function App() {
               </div>
             </motion.div>
           </motion.div>
+        )}
+
+        {/* --- HELL WARNING OVERLAY --- */}
+        {gameStarted && gameState?.isHellWarning && (
+          <div id="warning-screen" className="absolute inset-0 z-50 pointer-events-none bg-red-600 animate-flicker flex items-center justify-center">
+            <h1 className="text-5xl md:text-8xl text-white font-black drop-shadow-2xl glitch">
+              WARNING: HELL MODE
+            </h1>
+          </div>
         )}
 
         {/* --- CRASH OVERLAY --- */}
