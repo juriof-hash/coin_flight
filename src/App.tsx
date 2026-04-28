@@ -15,6 +15,7 @@ export default function App() {
   const [gameStarted, setGameStarted] = useState(false);
   const [showTimeBonus, setShowTimeBonus] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreenSupported, setIsFullscreenSupported] = useState(true);
 
   useEffect(() => {
     if (containerRef.current && !engineRef.current) {
@@ -31,21 +32,44 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const docEl = document.documentElement as any;
+    const requestFs = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
+    setIsFullscreenSupported(!!requestFs);
+
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      setIsFullscreen(!!(document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement || (document as any).msFullscreenElement));
     };
+
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
   }, []);
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch((err) => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-      });
+    const docEl = document.documentElement as any;
+    const requestFs = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
+    const exitFs = document.exitFullscreen || (document as any).webkitExitFullscreen || (document as any).mozCancelFullScreen || (document as any).msExitFullscreen;
+
+    if (!document.fullscreenElement && !(document as any).webkitFullscreenElement && !(document as any).mozFullScreenElement && !(document as any).msFullscreenElement) {
+      if (requestFs) {
+        requestFs.call(docEl).catch((err: any) => {
+          console.error(`Error attempting to enable fullscreen: ${err.message}`);
+          alert('Fullscreen API is blocked or not supported in this browser.');
+        });
+      } else {
+        alert('Fullscreen API is not supported on this device/browser.');
+      }
     } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
+      if (exitFs) {
+        exitFs.call(document);
       }
     }
   };
@@ -71,15 +95,17 @@ export default function App() {
   return (
     <div className="relative w-full h-screen overflow-hidden font-sans text-slate-100">
       {/* Fullscreen Toggle */}
-      <div className="absolute top-4 right-4 z-50">
-        <button 
-          onClick={toggleFullscreen}
-          className="p-2 bg-black/50 hover:bg-black/80 border-2 border-white/20 text-white/70 hover:text-white rounded-full transition-all backdrop-blur-md cursor-pointer pointer-events-auto"
-          title="Toggle Fullscreen"
-        >
-          {isFullscreen ? <Minimize className="w-5 h-5 md:w-6 md:h-6" /> : <Maximize className="w-5 h-5 md:w-6 md:h-6" />}
-        </button>
-      </div>
+      {isFullscreenSupported && (
+        <div className="absolute top-4 right-4 z-50">
+          <button 
+            onClick={toggleFullscreen}
+            className="p-2 bg-black/50 hover:bg-black/80 border-2 border-white/20 text-white/70 hover:text-white rounded-full transition-all backdrop-blur-md cursor-pointer pointer-events-auto"
+            title="Toggle Fullscreen"
+          >
+            {isFullscreen ? <Minimize className="w-5 h-5 md:w-6 md:h-6" /> : <Maximize className="w-5 h-5 md:w-6 md:h-6" />}
+          </button>
+        </div>
+      )}
 
       {/* Three.js Canvas Container */}
       <div ref={containerRef} className="absolute inset-0 z-0" />

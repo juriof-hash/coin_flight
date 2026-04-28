@@ -4,7 +4,9 @@ import { Howl } from 'howler';
 
 export const gameSounds = {
   warning: new Howl({ src: ['warning_siren.mp3'], loop: true, volume: 0.5 }),
-  bossEntry: new Howl({ src: ['boss_impact.mp3'], volume: 1.0 })
+  bossEntry: new Howl({ src: ['boss_impact.mp3'], volume: 1.0 }),
+  chargeUp: new Howl({ src: ['charge_up.mp3'], volume: 1.0 }),
+  rapidFire: new Howl({ src: ['rapid_fire.mp3'], volume: 0.7 })
 };
 
 export interface GameState {
@@ -729,7 +731,10 @@ export class GameEngine {
             break;
         }
     } else if (this.currentBossLevel === 2) {
-        // Level 2 Boss Logic (Direct Dash Attack)
+        // Level 2 Boss Logic (Direct Dash Attack or Hell Mode Combo)
+        const isHellMode = this.state.loopCount > 0;
+        const currentDashCount = this.bossEvadeCount + 1; // 1-indexed
+
         switch (this.bossState) {
             case 'idle':
                 // Hover at start position
@@ -739,21 +744,87 @@ export class GameEngine {
                 const vX = Math.cos(time * 2) * 16;
                 this.bossGroup.rotation.z = -vX * 0.015;
 
-                // Prepare to dash after 2 seconds
-                if (this.bossActionTimer > 2.0) {
+                if (isHellMode) {
+                    if (!this.bossGroup.userData.nextDashDelay) {
+                        this.bossGroup.userData.nextDashDelay = Math.random() * 1.5 + 0.5;
+                    }
+                    
+                    if (this.bossActionTimer > this.bossGroup.userData.nextDashDelay) {
+                         this.bossState = 'ready';
+                         this.bossActionTimer = 0;
+                         if (gameSounds.chargeUp) gameSounds.chargeUp.play();
+                    }
+                } else {
+                    // Prepare to dash after 2 seconds
+                    if (this.bossActionTimer > 2.0) {
+                        this.bossState = 'dashing';
+                        this.bossActionTimer = 0;
+                        this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                    }
+                }
+                break;
+            case 'ready': // Hell mode only
+                const shakeIntensity = 0.5;
+                this.bossGroup.position.x += (Math.random() - 0.5) * shakeIntensity;
+                this.bossGroup.position.y += (Math.random() - 0.5) * shakeIntensity;
+                
+                // Color indication
+                this.bossGroup.children.forEach(child => {
+                    if ((child as THREE.Mesh).isMesh) {
+                        const mat = (child as THREE.Mesh).material as THREE.MeshPhongMaterial;
+                        if (mat && mat.emissive) mat.emissive.setHex(0xaaaa00); // Glow yellow
+                    }
+                });
+                
+                if (this.bossActionTimer > 1.0) { // Glow/Shake for 1 second
                     this.bossState = 'dashing';
                     this.bossActionTimer = 0;
                     this.bossTargetPos.set(this.plane.position.x, this.plane.position.y, 20);
+                    this.bossGroup.userData.lastShotTime = performance.now() / 1000;
+                    
+                    // Reset emissive
+                    this.bossGroup.children.forEach(child => {
+                        if ((child as THREE.Mesh).isMesh) {
+                            const mat = (child as THREE.Mesh).material as THREE.MeshPhongMaterial;
+                            if (mat && mat.emissive) mat.emissive.setHex(0x111111);
+                        }
+                    });
                 }
                 break;
             case 'dashing':
                 // Rapidly move toward player
-                const dashSpeed = 150 * delta;
+                const dashSpeed = (isHellMode ? 225 : 150) * delta; // 1.5x in hell mode
                 const distToTarget = this.bossGroup.position.distanceTo(this.bossTargetPos);
                 
                 if (distToTarget > dashSpeed) {
                     const dir = this.bossTargetPos.clone().sub(this.bossGroup.position).normalize();
                     this.bossGroup.position.add(dir.multiplyScalar(dashSpeed));
+                    
+                    // Odd: High speed (already applied via base speed config above, 1.5x).
+                    // Even: Dash + Missile Barrage.
+                    if (isHellMode && currentDashCount % 2 === 0) {
+                        const now = performance.now() / 1000;
+                        if (now - this.bossGroup.userData.lastShotTime > 0.1) {
+                            this.bossGroup.userData.lastShotTime = now;
+                            
+                            // spawnMissile equivalent
+                            const projGeom = new THREE.SphereGeometry(1.5, 16, 16);
+                            const projMat = new THREE.MeshPhongMaterial({ color: 0xffaa00, emissive: 0xcc6600 });
+                            const mesh = new THREE.Mesh(projGeom, projMat);
+                            mesh.position.copy(this.bossGroup.position);
+                            this.worldObjects.add(mesh);
+                            
+                            // Velocity 0 so it stays where it dropped (like a trail).
+                            // Wait, if it's 0 velocity, it will just move towards the player at the world scroll speed.
+                            // The world scroll speed is +50 * gameSpeed.
+                            this.bossProjectiles.push({ mesh, velocity: new THREE.Vector3(0, 0, 0) });
+                            
+                            if (gameSounds.rapidFire) {
+                                if (gameSounds.rapidFire.playing()) gameSounds.rapidFire.stop();
+                                gameSounds.rapidFire.play();
+                            }
+                        }
+                    }
                 } else {
                     this.bossGroup.position.copy(this.bossTargetPos);
                 }
@@ -787,6 +858,8 @@ export class GameEngine {
                     this.bossGroup.position.copy(retTarget);
                     // Cycle complete
                     this.bossEvadeCount++;
+                    this.bossGroup.userData.nextDashDelay = 0; // reset
+                    
                     if (this.bossEvadeCount >= 5) {
                         this.endBossFight();
                     } else {
