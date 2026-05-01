@@ -120,20 +120,20 @@ export default function App() {
             className="absolute inset-x-0 inset-y-0 z-10 p-4 md:p-8 flex flex-col justify-between pointer-events-none"
           >
             {/* Top Row: Stats */}
-            <div className="flex flex-col sm:flex-row justify-between items-center sm:items-start gap-4 relative">
+            <div className="flex flex-col sm:flex-row justify-between items-center sm:items-start gap-2 sm:gap-4 relative">
               <div className="flex gap-2 md:gap-4 w-full sm:w-auto z-10">
-                <div className="flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-4 border-slate-700 p-3 md:p-4 shadow-[4px_4px_0_0_rgba(51,65,85,1)]">
-                  <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-300 font-bold mb-0.5 md:mb-1 text-center sm:text-left">SCORE</div>
-                  <div className="text-2xl md:text-5xl font-mono font-black text-white leading-none text-center sm:text-left">
+                <div className="flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-2 sm:border-4 border-slate-700 p-1 px-2 sm:p-3 md:p-4 shadow-none sm:shadow-[4px_4px_0_0_rgba(51,65,85,1)] rounded-sm sm:rounded-none">
+                  <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-300 font-bold mb-0 md:mb-1 text-center sm:text-left">SCORE</div>
+                  <div className="text-xl sm:text-2xl md:text-5xl font-mono font-black text-white leading-none text-center sm:text-left">
                     {gameState.score.toString().padStart(6, '0')}
                   </div>
                 </div>
-                <div className={`relative flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-4 ${gameState.isBossFight ? 'border-red-500 shadow-[4px_4px_0_0_rgba(239,68,68,0.5)]' : 'border-slate-700 shadow-[4px_4px_0_0_rgba(51,65,85,1)]'} p-3 md:p-4 transition-colors duration-500`}>
-                  <div className={`text-[10px] md:text-xs uppercase tracking-widest font-bold mb-0.5 md:mb-1 text-center sm:text-left ${gameState.isBossFight ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
+                <div className={`relative flex-1 sm:min-w-[120px] md:min-w-[140px] bg-black/80 border-2 sm:border-4 rounded-sm sm:rounded-none ${gameState.isBossFight ? 'border-red-500 shadow-none sm:shadow-[4px_4px_0_0_rgba(239,68,68,0.5)]' : 'border-slate-700 shadow-none sm:shadow-[4px_4px_0_0_rgba(51,65,85,1)]'} p-1 px-2 sm:p-3 md:p-4 transition-colors duration-500`}>
+                  <div className={`text-[10px] md:text-xs uppercase tracking-widest font-bold mb-0 md:mb-1 text-center sm:text-left ${gameState.isBossFight ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
                     {gameState.isBossFight ? 'SURVIVE!' : 'TIME'}
                   </div>
-                  <div className={`text-2xl md:text-5xl font-mono font-black leading-none text-center sm:text-left ${gameState.isBossFight ? 'text-red-500 scale-110 origin-left transition-transform' : (gameState.timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-orange-400')}`}>
-                    {Math.max(0, gameState.isBossFight ? gameState.bossTimeLeft : gameState.timeLeft).toFixed(1)}<span className="text-lg md:text-2xl ml-0.5">s</span>
+                  <div className={`text-xl sm:text-2xl md:text-5xl font-mono font-black leading-none text-center sm:text-left ${gameState.isBossFight ? 'text-red-500 scale-110 origin-center sm:origin-left transition-transform' : (gameState.timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-orange-400')}`}>
+                    {Math.max(0, gameState.isBossFight ? gameState.bossTimeLeft : gameState.timeLeft).toFixed(1)}<span className="text-sm sm:text-lg md:text-2xl ml-0.5">s</span>
                   </div>
                   <AnimatePresence>
                     {showTimeBonus && (
@@ -179,8 +179,8 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 w-full sm:w-auto justify-center z-10">
-                <div className="bg-black/80 border-4 border-slate-700 p-2 md:p-4 shadow-[4px_4px_0_0_rgba(51,65,85,1)] flex-1 sm:flex-none">
+              <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 w-auto justify-center z-10 mt-2 sm:mt-0 opacity-80 sm:opacity-100">
+                <div className="bg-black/50 sm:bg-black/80 border-2 sm:border-4 border-slate-700 p-1 px-3 sm:px-4 sm:p-2 md:p-4 shadow-none sm:shadow-[4px_4px_0_0_rgba(51,65,85,1)] flex-none rounded-full sm:rounded-none backdrop-blur-sm sm:backdrop-blur-none">
                   <div className="flex items-center gap-2 md:gap-4">
                     <div className="text-right hidden sm:block">
                       <div className="text-[10px] md:text-xs uppercase tracking-widest text-slate-400 font-bold">
@@ -190,15 +190,15 @@ export default function App() {
                         {gameState.stage}
                       </div>
                     </div>
-                    <div className={`w-8 h-8 md:w-12 md:h-12 border-4 border-white/10 border-t-current flex flex-col items-center justify-center text-[10px] md:text-xs font-black ${getStageColor(gameState.stage)}`}>
+                    <div className={`hidden sm:flex w-8 h-8 md:w-12 md:h-12 border-4 border-white/10 border-t-current flex-col items-center justify-center text-[10px] md:text-xs font-black ${getStageColor(gameState.stage)}`}>
                       {gameState.stage === 'Meadow' ? '1/4' : gameState.stage === 'Ocean' ? '2/4' : gameState.stage === 'City' ? '3/4' : '4/4'}
                     </div>
-                    <div className="sm:hidden text-left min-w-[70px]">
-                       <div className="text-[8px] font-bold uppercase text-slate-400">
-                         {gameState.loopCount > 0 ? `L${gameState.loopCount + 1}` : ''}
+                    <div className="sm:hidden flex items-center gap-2">
+                       <div className="text-[10px] font-bold uppercase text-slate-400">
+                         {gameState.loopCount > 0 ? `L${gameState.loopCount + 1}` : 'STAGE'}
                        </div>
-                       <div className={`text-[10px] font-bold uppercase ${getStageColor(gameState.stage)}`}>
-                        {gameState.stage}
+                       <div className={`text-[12px] font-bold uppercase ${getStageColor(gameState.stage)}`}>
+                        {gameState.stage} {gameState.stage === 'Meadow' ? '1/4' : gameState.stage === 'Ocean' ? '2/4' : gameState.stage === 'City' ? '3/4' : '4/4'}
                       </div>
                     </div>
                   </div>
